@@ -14,9 +14,7 @@ from PyQt6.QtWidgets import (
 
 from .clip_list import ClipListPanel
 from .export_dialog import ExportProgressDialog, ExportSettingsDialog
-from .ffmpeg_utils import (
-    Exporter, ProbeWorker, ThumbnailWorker, get_ffmpeg_path, get_ffprobe_path,
-)
+from .media_utils import Exporter, ProbeWorker, ThumbnailWorker
 from .models import Clip, SourceInfo
 from .timeline_widget import TimelineWidget
 from .utils import format_fps, format_time, random_pleasant_color
@@ -34,8 +32,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("VideoClipper")
         self.resize(1400, 860)
 
-        self.ffmpeg_path = get_ffmpeg_path()
-        self.ffprobe_path = get_ffprobe_path()
         self.video_path: Optional[str] = None
         self.source_info: Optional[SourceInfo] = None
         self.clips: List[Clip] = []
@@ -55,11 +51,6 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._wire_signals()
         self._install_shortcuts()
-
-        if not self.ffmpeg_path:
-            self.statusBar().showMessage(
-                "ffmpeg was not found. Thumbnails and export won't work until it's "
-                "installed (or `pip install imageio-ffmpeg`).", 10000)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -267,9 +258,7 @@ class MainWindow(QMainWindow):
         self.export_btn.setToolTip("Add at least one clip to export.")
 
     def _probe_source(self, path: str):
-        if not self.ffmpeg_path:
-            return
-        worker = ProbeWorker(self.ffmpeg_path, self.ffprobe_path, path)
+        worker = ProbeWorker(path)
         self._probe_workers.append(worker)
         worker.ready.connect(self._on_source_probed)
         worker.finished.connect(lambda w=worker: w in self._probe_workers and self._probe_workers.remove(w))
@@ -401,9 +390,9 @@ class MainWindow(QMainWindow):
     # Thumbnails
     # ------------------------------------------------------------------
     def _request_thumbnail(self, clip: Clip):
-        if not self.ffmpeg_path or not self.video_path:
+        if not self.video_path:
             return
-        worker = ThumbnailWorker(self.ffmpeg_path, clip.id, self.video_path, clip.start)
+        worker = ThumbnailWorker(clip.id, self.video_path, clip.start)
         self._thumb_workers.append(worker)
         worker.ready.connect(self._on_thumbnail_ready)
         worker.failed.connect(self._on_thumbnail_failed)
@@ -524,15 +513,6 @@ class MainWindow(QMainWindow):
     def open_export_dialog(self):
         if not self.clips or not self.video_path:
             return
-        if not self.ffmpeg_path:
-            QMessageBox.warning(
-                self, "ffmpeg not found",
-                "ffmpeg could not be found on your PATH, and the optional "
-                "imageio-ffmpeg package isn't installed either.\n\n"
-                "Install ffmpeg (or run: pip install imageio-ffmpeg) and restart "
-                "VideoClipper to export clips.",
-            )
-            return
         dialog = ExportSettingsDialog(
             self.clips, video_path=self.video_path, source_info=self.source_info, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -543,7 +523,7 @@ class MainWindow(QMainWindow):
         self._progress_dialog = ExportProgressDialog(len(clips_sorted), parent=self)
 
         self._exporter = Exporter(
-            self.ffmpeg_path, self.video_path, clips_sorted,
+            self.video_path, clips_sorted,
             settings["output_dir"], settings, settings["ext"],
             source_info=self.source_info,
         )
