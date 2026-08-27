@@ -46,6 +46,57 @@ def random_pleasant_color() -> tuple[int, int, int]:
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
+def format_time_frames(seconds: float, fps: Optional[float], always_hours: bool = False) -> str:
+    """Format as M:SS.FF (or H:MM:SS.FF) - FF is the frame *number* within
+    the current second (00 to fps-1), not hundredths of a second. Falls
+    back to 30fps if fps isn't known yet (matches the frame-step shortcut's
+    own fallback in main_window.py)."""
+    seconds = max(0.0, seconds)
+    fps = fps if fps and fps > 0 else 30.0
+    fps_int = max(1, round(fps))
+    total_frames = int(round(seconds * fps))
+    whole_seconds, frame = divmod(total_frames, fps_int)
+    h, rem = divmod(whole_seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h or always_hours:
+        return f"{h:d}:{m:02d}:{s:02d}.{frame:02d}"
+    return f"{m:d}:{s:02d}.{frame:02d}"
+
+
+def parse_time_frames(text: str, fps: Optional[float]) -> Optional[float]:
+    """Parse 'M:SS.FF', 'H:MM:SS.FF', or plain seconds ('SS' / 'SS.FF') back
+    into seconds. Returns None if the text doesn't parse as a time at all -
+    callers should treat that as "leave it alone", not clamp/guess."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    fps = fps if fps and fps > 0 else 30.0
+    fps_int = max(1, round(fps))
+
+    frame = 0
+    if "." in text:
+        text, frame_str = text.rsplit(".", 1)
+        if not frame_str.isdigit():
+            return None
+        frame = int(frame_str)
+        if frame >= fps_int:
+            return None  # not a real frame number at this fps
+
+    parts = text.split(":")
+    if not (1 <= len(parts) <= 3) or not all(p.strip().isdigit() for p in parts):
+        return None
+    parts = [int(p) for p in parts]
+    if len(parts) == 1:
+        h, m, s = 0, 0, parts[0]
+    elif len(parts) == 2:
+        h, m, s = 0, parts[0], parts[1]
+    else:
+        h, m, s = parts
+    if m >= 60 or s >= 60:
+        return None
+    return h * 3600 + m * 60 + s + frame / fps
+
+
 def format_fps(fps: Optional[float]) -> str:
     """Format a frame rate for display, e.g. 25.0 -> '25', 29.97 -> '29.97'."""
     if not fps or fps <= 0:
