@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from . import project as project_file
 from .clip_list import ClipListPanel
 from .export_dialog import ExportProgressDialog, ExportSettingsDialog
+from .help_dialog import HelpDialog
 from .media_utils import Exporter, ProbeWorker, ThumbnailWorker
 from .models import Clip, SourceInfo
 from .time_display import TimeDisplayWidget
@@ -90,6 +91,9 @@ class MainWindow(QMainWindow):
 
         self.exit_action = QAction("Exit", self)
         file_menu.addAction(self.exit_action)
+
+        self.help_action = QAction("&Help", self)
+        self.menuBar().addAction(self.help_action)
 
     def _build_ui(self):
         self._build_menu()
@@ -248,6 +252,7 @@ class MainWindow(QMainWindow):
         self.recent_menu.aboutToShow.connect(self._rebuild_recent_menu)
         self.clear_recent_action.triggered.connect(self._clear_recent_projects)
         self.exit_action.triggered.connect(self.close)
+        self.help_action.triggered.connect(self.show_help)
 
         self.open_video_btn.clicked.connect(self.open_video_dialog)
         self.viewport.open_requested.connect(self.open_video_dialog)
@@ -502,6 +507,9 @@ class MainWindow(QMainWindow):
 
     def _clear_recent_projects(self):
         QSettings(_ORG, _APP).setValue(_RECENT_PROJECTS_KEY, [])
+
+    def show_help(self):
+        HelpDialog(self).exec()
 
     def _probe_source(self, path: str):
         worker = ProbeWorker(path)

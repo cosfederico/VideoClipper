@@ -86,6 +86,12 @@ python videoclipper.py
 - **Clear Recent Projects** — empties that list.
 - **Exit** — closes the app (same confirmation as the window's close button).
 
+### Help menu
+
+**Help**, next to File, opens a popup with the shortcut table below plus a
+summary of mouse interactions, projects, and export settings — a quick
+reference without leaving the app.
+
 ### Shortcuts
 
 | Key | Action |
