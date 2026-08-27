@@ -1,0 +1,5 @@
+PyQt6>=6.6
+
+# Optional: provides a bundled ffmpeg binary so the app works even if ffmpeg
+# isn't installed system-wide / on PATH. ffprobe is NOT needed by this app.
+# imageio-ffmpeg>=0.4.9
