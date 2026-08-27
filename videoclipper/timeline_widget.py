@@ -4,7 +4,10 @@ from __future__ import annotations
 from typing import List, Optional
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFontMetrics, QMouseEvent, QPainter, QPen, QPolygonF, QResizeEvent
+from PyQt6.QtGui import (
+    QColor, QFontMetrics, QMouseEvent, QPainter, QPen, QPolygonF, QResizeEvent,
+    QWheelEvent,
+)
 from PyQt6.QtWidgets import QLineEdit, QMenu, QWidget
 
 from .models import Clip
@@ -16,6 +19,15 @@ _TRACK_H = 42
 _RULER_Y = _TRACK_Y + _TRACK_H + 4
 _EDGE_GRAB_PX = 6
 _MIN_CLIP_LEN = 0.05
+
+# Zoom: 1.0 shows the whole clip (the only mode that existed before zoom was
+# added); MAX_ZOOM shows 1/60th of it. Exposed (no leading underscore) since
+# main_window.py compares against them to enable/disable the zoom buttons.
+MIN_ZOOM = 1.0
+MAX_ZOOM = 60.0
+_WHEEL_ZOOM_FACTOR = 1.15   # per wheel notch (angleDelta of 120)
+_BUTTON_ZOOM_FACTOR = 1.6   # per click of the +/- buttons
+_WHEEL_PAN_FRACTION = 0.08  # of the visible window, per wheel notch
 
 
 class _InlineEditor(QLineEdit):
@@ -37,6 +49,7 @@ class TimelineWidget(QWidget):
     clip_color_requested = pyqtSignal(int)
     clip_resizing = pyqtSignal(int, float, float)   # live, while dragging an edge
     clip_resized = pyqtSignal(int, float, float)    # once, on release
+    view_changed = pyqtSignal(float, float, float)  # zoom, view_start, duration
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -49,6 +62,12 @@ class TimelineWidget(QWidget):
         self.position = 0.0
         self.pending_start: Optional[float] = None
         self.clips: List[Clip] = []
+
+        # zoom/pan: the widget always maps [view_start, view_start + visible
+        # duration] to its width. zoom == MIN_ZOOM means visible duration ==
+        # duration (the only mode that existed before zoom was added).
+        self.zoom = MIN_ZOOM
+        self.view_start = 0.0
 
         self._dragging = False
         self._active_editor: Optional[_InlineEditor] = None
@@ -65,6 +84,17 @@ class TimelineWidget(QWidget):
 
     def set_position(self, seconds: float):
         self.position = max(0.0, seconds)
+        # Keep the playhead in view when zoomed in - e.g. playback or a
+        # keyboard seek moving it past the edge of the current window. A
+        # drag on the track itself can never do this: _t_for already clamps
+        # to the current window, so it can't produce an out-of-view result.
+        if self.zoom > MIN_ZOOM + 1e-9:
+            visible = self.visible_duration()
+            if not (self.view_start <= self.position <= self.view_start + visible):
+                old_view_start = self.view_start
+                self._set_view_start(self.position - visible / 2.0)
+                if abs(self.view_start - old_view_start) > 1e-9:
+                    self.view_changed.emit(self.zoom, self.view_start, self.duration)
         self.update()
 
     def set_pending_start(self, seconds: Optional[float]):
@@ -87,22 +117,98 @@ class TimelineWidget(QWidget):
         self.pending_start = None
         self.duration = 0.0
         self.position = 0.0
+        self.zoom = MIN_ZOOM
+        self.view_start = 0.0
         self._resizing_clip = None
         self._resizing_edge = None
         self.update()
+        self.view_changed.emit(self.zoom, self.view_start, self.duration)
 
     # -- coordinate mapping ----------------------------------------------
     def _usable_width(self) -> float:
         return max(1.0, self.width() - 2 * _MARGIN)
 
+    def visible_duration(self) -> float:
+        return max(0.001, self.duration / self.zoom) if self.duration > 0 else 0.001
+
     def _x_for(self, t: float) -> float:
-        dur = max(self.duration, 0.001)
-        return _MARGIN + (t / dur) * self._usable_width()
+        visible = self.visible_duration()
+        return _MARGIN + ((t - self.view_start) / visible) * self._usable_width()
 
     def _t_for(self, x: float) -> float:
-        dur = max(self.duration, 0.001)
+        visible = self.visible_duration()
         frac = (x - _MARGIN) / self._usable_width()
-        return max(0.0, min(dur, frac * dur))
+        return max(0.0, min(self.duration, self.view_start + frac * visible))
+
+    # -- zoom / pan --------------------------------------------------------
+    def _set_view_start(self, view_start: float):
+        visible = self.visible_duration()
+        max_start = max(0.0, self.duration - visible)
+        self.view_start = max(0.0, min(max_start, view_start))
+
+    def set_zoom(self, zoom: float, anchor_time: Optional[float] = None):
+        """Zoom to `zoom` (clamped to [MIN_ZOOM, MAX_ZOOM]), keeping
+        `anchor_time` at the same pixel position it was at before the
+        change (defaults to the middle of the current view)."""
+        if self.duration <= 0:
+            return
+        old_visible = self.visible_duration()
+        if anchor_time is None:
+            anchor_time = self.view_start + old_visible / 2.0
+        frac = (anchor_time - self.view_start) / old_visible
+
+        new_zoom = max(MIN_ZOOM, min(MAX_ZOOM, zoom))
+        if abs(new_zoom - self.zoom) < 1e-9:
+            return
+        self.zoom = new_zoom
+        new_visible = self.visible_duration()
+        self._set_view_start(anchor_time - frac * new_visible)
+        self.update()
+        self.view_changed.emit(self.zoom, self.view_start, self.duration)
+
+    def zoom_in(self):
+        self.set_zoom(self.zoom * _BUTTON_ZOOM_FACTOR, anchor_time=self.position)
+
+    def zoom_out(self):
+        self.set_zoom(self.zoom / _BUTTON_ZOOM_FACTOR, anchor_time=self.position)
+
+    def reset_zoom(self):
+        self.set_zoom(MIN_ZOOM)
+
+    def _pan(self, delta_seconds: float):
+        if self.zoom <= MIN_ZOOM + 1e-9:
+            return
+        self.pan_to(self.view_start + delta_seconds)
+
+    def pan_to(self, view_start: float):
+        """Move the visible window to start at `view_start` (clamped to
+        valid bounds) without changing zoom. Used by wheel/keyboard panning
+        and by the horizontal scrollbar main_window.py shows once zoomed
+        in - the scrollbar's own valueChanged handler calls this."""
+        old = self.view_start
+        self._set_view_start(view_start)
+        if abs(self.view_start - old) > 1e-9:
+            self.update()
+            self.view_changed.emit(self.zoom, self.view_start, self.duration)
+
+    def wheelEvent(self, event: QWheelEvent):
+        if self.duration <= 0:
+            event.ignore()
+            return
+        angle = event.angleDelta()
+        shift_pan = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier) and angle.y() != 0
+        if angle.x() != 0 or shift_pan:
+            notches = (angle.x() if angle.x() != 0 else -angle.y()) / 120.0
+            self._pan(notches * _WHEEL_PAN_FRACTION * self.visible_duration())
+            event.accept()
+            return
+        if angle.y() != 0:
+            anchor_t = self._t_for(event.position().x())
+            notches = angle.y() / 120.0
+            self.set_zoom(self.zoom * (_WHEEL_ZOOM_FACTOR ** notches), anchor_time=anchor_t)
+            event.accept()
+            return
+        event.ignore()
 
     def _clip_rect(self, clip: Clip) -> QRect:
         x0 = self._x_for(clip.start)
@@ -191,14 +297,22 @@ class TimelineWidget(QWidget):
 
     def _draw_ruler(self, painter: QPainter, w: int):
         painter.setPen(QColor("#565b68"))
-        step = nice_time_step(self.duration, self._usable_width())
-        t = 0.0
+        visible = self.visible_duration()
+        step = nice_time_step(visible, self._usable_width())
+        # Tick spacing (and the visible range to iterate) both track the
+        # zoomed-in window, not the full duration - otherwise a heavily
+        # zoomed-in view would either draw thousands of off-screen ticks
+        # (iterating from 0) or space them by the whole clip's duration
+        # (using the un-zoomed step).
+        t = (self.view_start // step) * step if step > 0 else 0.0
+        end_t = min(self.duration, self.view_start + visible)
         # small epsilon so float error doesn't drop the last tick
-        while t <= self.duration + 1e-6:
-            x = self._x_for(t)
-            painter.drawLine(QPoint(int(x), _TRACK_Y + _TRACK_H + 1), QPoint(int(x), _TRACK_Y + _TRACK_H + 6))
-            label_rect = QRect(int(x) - 26, _RULER_Y, 52, 14)
-            painter.drawText(label_rect, int(Qt.AlignmentFlag.AlignHCenter), format_time(t))
+        while t <= end_t + 1e-6:
+            if t >= -1e-6:
+                x = self._x_for(t)
+                painter.drawLine(QPoint(int(x), _TRACK_Y + _TRACK_H + 1), QPoint(int(x), _TRACK_Y + _TRACK_H + 6))
+                label_rect = QRect(int(x) - 26, _RULER_Y, 52, 14)
+                painter.drawText(label_rect, int(Qt.AlignmentFlag.AlignHCenter), format_time(t))
             t += step
 
     def _draw_playhead(self, painter: QPainter):

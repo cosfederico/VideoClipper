@@ -46,11 +46,19 @@ python videoclipper.py
    and play it — playback auto-pauses at the clip's end. Any manual seek
    (dragging the timeline, arrow keys, Home/End) cancels that auto-stop.
 8. Use the speaker button and slider next to Play to control volume/mute.
-9. Click **Export Clips** (top right), choose an output folder and quality
-   settings, then **Export**. A progress dialog shows overall percent, ETA,
-   and the current clip's encode progress, and closes itself automatically
-   once a successful export finishes (it stays open if something fails, so
-   you can read the error).
+9. Zoom the timeline with the mouse wheel (zooms in on whatever's under the
+   cursor), Shift+wheel to pan left/right once zoomed in, or use the
+   **−** / **+** / **Fit** buttons below the timeline (which zoom around the
+   playhead instead). The zoomed view follows the playhead automatically
+   during playback or a seek. Reopening a video resets the zoom.
+   Once zoomed, a scrollbar appears below the timeline for panning without
+   a mouse: Tab to it, then Left/Right/Home/End (or drag/click it like any
+   scrollbar).
+10. Click **Export Clips** (top right), choose an output folder and quality
+    settings, then **Export**. A progress dialog shows overall percent, ETA,
+    and the current clip's encode progress, and closes itself automatically
+    once a successful export finishes (it stays open if something fails, so
+    you can read the error).
 
 ### Shortcuts
 
@@ -62,6 +70,7 @@ python videoclipper.py
 | Esc | Cancel a pending in-point |
 | ←/→ | Seek 5s back/forward |
 | Shift+←/→ | Seek 1s back/forward |
+| ↑/↓ | Step one frame forward/back (pauses) |
 | Home/End | Jump to start/end |
 
 ## Notes on export settings

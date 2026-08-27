@@ -4,21 +4,23 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QEvent, Qt, QTimer
 from PyQt6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QApplication, QColorDialog, QDialog, QFileDialog, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QPushButton, QSlider, QSplitter,
-    QToolButton, QVBoxLayout, QWidget,
+    QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollBar, QSlider,
+    QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
 from .clip_list import ClipListPanel
 from .export_dialog import ExportProgressDialog, ExportSettingsDialog
 from .media_utils import Exporter, ProbeWorker, ThumbnailWorker
 from .models import Clip, SourceInfo
-from .timeline_widget import TimelineWidget
+from .timeline_widget import MAX_ZOOM, MIN_ZOOM, TimelineWidget
 from .utils import format_fps, format_time, random_pleasant_color
 from .video_widget import VideoViewport
+
+_SCROLLBAR_SCALE = 1000  # seconds -> integer units for the QScrollBar (millisecond resolution)
 
 _VIDEO_FILTER = (
     "Video Files (*.mp4 *.mkv *.avi *.mov *.webm *.m4v *.wmv *.flv *.mpg *.mpeg *.ts);;"
@@ -147,6 +149,53 @@ class MainWindow(QMainWindow):
         self.timeline = TimelineWidget()
         left_layout.addWidget(self.timeline)
 
+        # Only shown once zoomed in - at zoom 1.0 the whole clip is already
+        # visible, so there's nothing to scroll. Keyboard-focusable (Tab
+        # onto it, then Left/Right/PageUp/PageDown/Home/End) so panning
+        # doesn't require the mouse.
+        self.pan_scrollbar = QScrollBar(Qt.Orientation.Horizontal)
+        self.pan_scrollbar.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.pan_scrollbar.setCursor(Qt.CursorShape.ArrowCursor)
+        self.pan_scrollbar.setInvertedControls(False)
+        self.pan_scrollbar.setVisible(False)
+        left_layout.addWidget(self.pan_scrollbar)
+
+        zoom_row = QHBoxLayout()
+        zoom_row.setSpacing(6)
+        zoom_row.addStretch(1)
+
+        self.zoom_out_btn = QToolButton()
+        self.zoom_out_btn.setText("−")
+        self.zoom_out_btn.setToolTip("Zoom out")
+        self.zoom_out_btn.setEnabled(False)
+        self.zoom_out_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.zoom_out_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setObjectName("muted")
+        self.zoom_label.setFixedWidth(44)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.zoom_in_btn = QToolButton()
+        self.zoom_in_btn.setText("+")
+        self.zoom_in_btn.setToolTip("Zoom in")
+        self.zoom_in_btn.setEnabled(False)
+        self.zoom_in_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.zoom_in_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self.zoom_fit_btn = QToolButton()
+        self.zoom_fit_btn.setText("Fit")
+        self.zoom_fit_btn.setToolTip("Reset zoom to fit the whole video")
+        self.zoom_fit_btn.setEnabled(False)
+        self.zoom_fit_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.zoom_fit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        zoom_row.addWidget(self.zoom_out_btn)
+        zoom_row.addWidget(self.zoom_label)
+        zoom_row.addWidget(self.zoom_in_btn)
+        zoom_row.addWidget(self.zoom_fit_btn)
+        left_layout.addLayout(zoom_row)
+
         self.clip_panel = ClipListPanel()
         self.clip_panel.setObjectName("rightPane")
         self.clip_panel.setMinimumWidth(300)
@@ -179,6 +228,12 @@ class MainWindow(QMainWindow):
         self.timeline.clip_color_requested.connect(self.change_clip_color)
         self.timeline.clip_resizing.connect(self._on_clip_resizing)
         self.timeline.clip_resized.connect(self._on_clip_resized)
+        self.timeline.view_changed.connect(self._on_view_changed)
+
+        self.zoom_out_btn.clicked.connect(self.timeline.zoom_out)
+        self.zoom_in_btn.clicked.connect(self.timeline.zoom_in)
+        self.zoom_fit_btn.clicked.connect(self.timeline.reset_zoom)
+        self.pan_scrollbar.valueChanged.connect(self._on_scrollbar_moved)
 
         self.clip_panel.item_activated.connect(self.on_clip_activated)
         self.clip_panel.item_renamed.connect(self.rename_clip)
@@ -201,9 +256,32 @@ class MainWindow(QMainWindow):
             bind("Right", lambda: self._seek_relative(5)),
             bind("Shift+Left", lambda: self._seek_relative(-1)),
             bind("Shift+Right", lambda: self._seek_relative(1)),
+            bind("Up", lambda: self._step_frame(1)),
+            bind("Down", lambda: self._step_frame(-1)),
             bind("Home", lambda: self._safe_seek(0.0)),
             bind("End", lambda: self._safe_seek(self.viewport.duration())),
         ]
+
+        # QShortcut's default WindowShortcut context steals a matching key
+        # before it ever reaches a focused widget's own keyPressEvent -
+        # unlike QLineEdit, QScrollBar doesn't claim these keys for itself
+        # via a ShortcutOverride, so without this, tabbing onto the pan
+        # scrollbar and pressing Left/Right/Up/Down/Home/End would do
+        # *nothing* (not even scroll it) instead of panning it. Disable the
+        # shortcuts outright while it has focus so the keys reach it.
+        self.pan_scrollbar.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if obj is self.pan_scrollbar:
+            if event.type() == QEvent.Type.FocusIn:
+                self._set_shortcuts_enabled(False)
+            elif event.type() == QEvent.Type.FocusOut:
+                self._set_shortcuts_enabled(True)
+        return super().eventFilter(obj, event)
+
+    def _set_shortcuts_enabled(self, enabled: bool):
+        for shortcut in self._shortcuts:
+            shortcut.setEnabled(enabled)
 
     # ------------------------------------------------------------------
     # Unsaved-work guard
@@ -256,6 +334,10 @@ class MainWindow(QMainWindow):
         self.end_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
         self.export_btn.setToolTip("Add at least one clip to export.")
+        self.zoom_out_btn.setEnabled(False)
+        self.zoom_in_btn.setEnabled(False)
+        self.zoom_fit_btn.setEnabled(False)
+        self.pan_scrollbar.setVisible(False)
 
     def _probe_source(self, path: str):
         worker = ProbeWorker(path)
@@ -282,6 +364,30 @@ class MainWindow(QMainWindow):
             self.volume_slider.setEnabled(True)
             self.start_btn.setEnabled(self.pending_start is None)
             self.end_btn.setEnabled(self.pending_start is not None)
+            self.zoom_in_btn.setEnabled(True)
+            # sets out/fit's enabled state and the (still-hidden) scrollbar's range
+            self._on_view_changed(self.timeline.zoom, self.timeline.view_start, self.timeline.duration)
+
+    def _on_view_changed(self, zoom: float, view_start: float, duration: float):
+        self.zoom_label.setText(f"{round(zoom * 100)}%")
+        zoomed_in = self.video_path is not None and zoom > MIN_ZOOM + 1e-6
+        self.zoom_out_btn.setEnabled(zoomed_in)
+        self.zoom_fit_btn.setEnabled(zoomed_in)
+        self.zoom_in_btn.setEnabled(self.video_path is not None and zoom < MAX_ZOOM - 1e-6)
+
+        self.pan_scrollbar.setVisible(zoomed_in)
+        if zoomed_in and duration > 0:
+            visible = duration / zoom
+            max_start = max(0.0, duration - visible)
+            self.pan_scrollbar.blockSignals(True)
+            self.pan_scrollbar.setRange(0, round(max_start * _SCROLLBAR_SCALE))
+            self.pan_scrollbar.setPageStep(max(1, round(visible * _SCROLLBAR_SCALE)))
+            self.pan_scrollbar.setSingleStep(max(1, round(visible * 0.1 * _SCROLLBAR_SCALE)))
+            self.pan_scrollbar.setValue(round(view_start * _SCROLLBAR_SCALE))
+            self.pan_scrollbar.blockSignals(False)
+
+    def _on_scrollbar_moved(self, value: int):
+        self.timeline.pan_to(value / _SCROLLBAR_SCALE)
 
     def _on_position_changed(self, seconds: float):
         self.timeline.set_position(seconds)
@@ -467,45 +573,55 @@ class MainWindow(QMainWindow):
         self.viewport.play()
 
     # ------------------------------------------------------------------
-    # Shortcuts (guarded so typing in a rename box doesn't trigger them)
+    # Shortcuts (guarded so typing in a rename box, or using the pan
+    # scrollbar's own Left/Right/Home/End keyboard handling, doesn't also
+    # trigger the global shortcut for the same key)
     # ------------------------------------------------------------------
     @staticmethod
-    def _typing_in_text_field() -> bool:
-        return isinstance(QApplication.focusWidget(), QLineEdit)
+    def _input_widget_has_focus() -> bool:
+        return isinstance(QApplication.focusWidget(), (QLineEdit, QScrollBar))
 
     def _shortcut_toggle_play(self):
-        if self._typing_in_text_field() or not self.video_path:
+        if self._input_widget_has_focus() or not self.video_path:
             return
         self.viewport.toggle_play()
 
     def _shortcut_set_start(self):
-        if self._typing_in_text_field():
+        if self._input_widget_has_focus():
             return
         if self.start_btn.isEnabled():
             self.on_set_start()
 
     def _shortcut_set_end(self):
-        if self._typing_in_text_field():
+        if self._input_widget_has_focus():
             return
         if self.end_btn.isEnabled():
             self.on_set_end()
 
     def _shortcut_cancel_pending(self):
-        if self._typing_in_text_field():
+        if self._input_widget_has_focus():
             return
         self._cancel_pending_marker()
 
     def _seek_relative(self, delta: float):
-        if self._typing_in_text_field() or not self.video_path:
+        if self._input_widget_has_focus() or not self.video_path:
             return
         self._active_clip_end = None
         self.viewport.seek(self.viewport.current_position() + delta)
 
     def _safe_seek(self, t: float):
-        if self._typing_in_text_field() or not self.video_path:
+        if self._input_widget_has_focus() or not self.video_path:
             return
         self._active_clip_end = None
         self.viewport.seek(t)
+
+    def _step_frame(self, delta_frames: int):
+        if self._input_widget_has_focus() or not self.video_path:
+            return
+        self._active_clip_end = None
+        self.viewport.pause()  # frame-stepping only makes sense paused
+        fps = self.source_info.fps if self.source_info and self.source_info.fps else 30.0
+        self.viewport.seek(self.viewport.current_position() + delta_frames / fps)
 
     # ------------------------------------------------------------------
     # Export
