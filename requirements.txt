@@ -1,5 +1,4 @@
 PyQt6>=6.6
-
-# Optional: provides a bundled ffmpeg binary so the app works even if ffmpeg
-# isn't installed system-wide / on PATH. ffprobe is NOT needed by this app.
-# imageio-ffmpeg>=0.4.9
+av>=13.0        # PyAV - bundles FFmpeg's libraries statically; no system
+                # ffmpeg/ffprobe install or PATH lookup needed.
+Pillow>=10.0    # thumbnail JPEG encode (PyAV's VideoFrame.to_image() needs it)

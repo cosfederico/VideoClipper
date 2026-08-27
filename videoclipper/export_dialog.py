@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from .ffmpeg_utils import FPS_CHOICES, SCALE_CHOICES, build_output_basename
+from .media_utils import FPS_CHOICES, SCALE_CHOICES, WEBM_AUDIO_CODEC, build_output_basename
 from .models import Clip, SourceInfo
 from .utils import format_fps, format_time
 
@@ -30,6 +30,13 @@ _CODEC_LABELS = {
 
 _PRESETS = ["ultrafast", "superfast", "veryfast", "faster", "fast",
             "medium", "slow", "slower", "veryslow"]
+
+# WebM can only mux Vorbis/Opus audio, never AAC, so it gets its own,
+# narrower choice list (also no "Copy": we can't tell at dialog-build time
+# whether the source's audio is already Opus/Vorbis, and guessing wrong
+# would fail at export time same as picking AAC does).
+_AUDIO_CODEC_CHOICES_DEFAULT = [("AAC", "aac"), ("Copy", "copy")]
+_AUDIO_CODEC_CHOICES_WEBM = [("Opus", WEBM_AUDIO_CODEC)]
 
 
 class ExportSettingsDialog(QDialog):
@@ -120,7 +127,6 @@ class ExportSettingsDialog(QDialog):
         form.addRow("", self.audio_check)
 
         self.audio_codec_combo = QComboBox()
-        self.audio_codec_combo.addItems(["AAC", "Copy"])
         form.addRow("Audio codec", self.audio_codec_combo)
 
         self.audio_bitrate_combo = QComboBox()
@@ -182,6 +188,20 @@ class ExportSettingsDialog(QDialog):
             self.codec_combo.addItem(_CODEC_LABELS[codec], codec)
         self.codec_combo.blockSignals(False)
         self._on_codec_changed(self.codec_combo.currentText())
+        self._populate_audio_codecs(is_webm=label.startswith("WebM"))
+
+    def _populate_audio_codecs(self, is_webm: bool):
+        choices = _AUDIO_CODEC_CHOICES_WEBM if is_webm else _AUDIO_CODEC_CHOICES_DEFAULT
+        current = self.audio_codec_combo.currentData()
+        self.audio_codec_combo.blockSignals(True)
+        self.audio_codec_combo.clear()
+        for text, data in choices:
+            self.audio_codec_combo.addItem(text, data)
+        restore_index = next((i for i in range(self.audio_codec_combo.count())
+                              if self.audio_codec_combo.itemData(i) == current), 0)
+        self.audio_codec_combo.setCurrentIndex(restore_index)
+        self.audio_codec_combo.blockSignals(False)
+        self._on_audio_codec_changed(self.audio_codec_combo.currentText())
 
     def _on_codec_changed(self, _label: str):
         codec = self.codec_combo.currentData()
@@ -205,10 +225,11 @@ class ExportSettingsDialog(QDialog):
 
     def _on_audio_toggled(self, checked: bool):
         self.audio_codec_combo.setEnabled(checked)
-        self.audio_bitrate_combo.setEnabled(checked and self.audio_codec_combo.currentText() == "AAC")
+        self.audio_bitrate_combo.setEnabled(checked and self.audio_codec_combo.currentData() != "copy")
 
-    def _on_audio_codec_changed(self, text: str):
-        self.audio_bitrate_combo.setEnabled(self.audio_check.isChecked() and text == "AAC")
+    def _on_audio_codec_changed(self, _text: str):
+        codec = self.audio_codec_combo.currentData()
+        self.audio_bitrate_combo.setEnabled(self.audio_check.isChecked() and codec != "copy")
 
     def _update_filename_preview(self):
         ext, _ = _CONTAINERS[self.container_combo.currentText()] if self.container_combo.count() else (".mp4", None)
@@ -250,7 +271,7 @@ class ExportSettingsDialog(QDialog):
             "fps_arg": self.fps_combo.currentData(),
             "fps_label": self.fps_combo.currentText(),
             "include_audio": self.audio_check.isChecked(),
-            "audio_codec": "aac" if self.audio_codec_combo.currentText() == "AAC" else "copy",
+            "audio_codec": self.audio_codec_combo.currentData(),
             "audio_bitrate": self.audio_bitrate_combo.currentText(),
             "include_video_name": self.include_video_name_check.isChecked(),
             "save_metadata": self.save_metadata_check.isChecked(),
