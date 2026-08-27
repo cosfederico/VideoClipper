@@ -91,6 +91,19 @@ QLabel#openVideoHint {{
     margin-top: 10px;
 }}
 
+QWidget#dropZone {{
+    border: 2px dashed {BORDER};
+    border-radius: 16px;
+}}
+QWidget#dropZone[dragActive="true"] {{
+    border-color: {ACCENT};
+    background: rgba(91, 140, 255, 0.08);
+}}
+QLabel#dropZoneHint {{
+    color: {MUTED};
+    margin-top: 4px;
+}}
+
 QPushButton#markerStart, QPushButton#markerEnd {{
     border-radius: 8px;
     padding: 7px 16px;
