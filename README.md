@@ -41,8 +41,10 @@ python videoclipper.py
    handle so you can see exactly where you're cutting. A trim is clamped so
    it can never cross into a neighboring clip.
 6. Click a clip's block on the timeline to select it (it highlights);
-   press **Del** to delete it — no confirmation prompt. Click empty track,
-   or anywhere else in the window, to deselect. Double-click a block (or a
+   press **Del** to delete it — no confirmation prompt. With a clip
+   selected, **I**/**O** move its in/out point to the current playhead
+   position instead of starting a new clip. Click empty track, or
+   anywhere else in the window, to deselect. Double-click a block (or a
    clip's name in the right panel) to rename it; right-click a block for
    rename/recolor/delete.
 7. Click a clip card on the right to jump the viewport to that clip's start
@@ -67,13 +69,31 @@ python videoclipper.py
     once a successful export finishes (it stays open if something fails, so
     you can read the error).
 
+### File menu
+
+- **Open Video...** — same as the Open Video button.
+- **Save Project JSON...** (**Ctrl+S**) — saves the video path, all clips
+  (name/start/end/color), and the last-used export settings to a JSON
+  file. The first save asks for a location; after that, Ctrl+S saves
+  straight back to that file. Use **Save Project JSON...** again to pick
+  a different file.
+- **Open Project JSON...** — loads a saved project, restoring the clips
+  and export settings and reopening its video. If the video has moved or
+  been deleted, the clips still load (the timeline sizes itself to fit
+  them) so you can relink it via Open Video. Asks for confirmation first
+  if the current session has unsaved/unexported clips.
+- **Open Recent** — the last 10 saved/opened project files.
+- **Clear Recent Projects** — empties that list.
+- **Exit** — closes the app (same confirmation as the window's close button).
+
 ### Shortcuts
 
 | Key | Action |
 | --- | --- |
+| Ctrl+S | Save project |
 | Space | Play / pause |
-| I | Set in-point |
-| O | Set out-point |
+| I | Set in-point (or move selected clip's in-point) |
+| O | Set out-point (or move selected clip's out-point) |
 | Esc | Cancel a pending in-point |
 | ←/→ | Seek 5s back/forward |
 | Shift+←/→ | Seek 1s back/forward |

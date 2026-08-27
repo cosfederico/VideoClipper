@@ -36,16 +36,33 @@ _AUDIO_CODEC_CHOICES_DEFAULT = [("AAC", "aac"), ("Copy", "copy")]
 _AUDIO_CODEC_CHOICES_WEBM = [("Opus", WEBM_AUDIO_CODEC)]
 
 
+def _select_by_data(combo: QComboBox, value) -> bool:
+    for i in range(combo.count()):
+        if combo.itemData(i) == value:
+            combo.setCurrentIndex(i)
+            return True
+    return False
+
+
+def _container_label_for_ext(ext: Optional[str]) -> Optional[str]:
+    for label, (container_ext, _codecs) in _CONTAINERS.items():
+        if container_ext == ext:
+            return label
+    return None
+
+
 class ExportSettingsDialog(QDialog):
     def __init__(self, clips: List[Clip], video_path: str = "",
                  source_info: Optional[SourceInfo] = None,
-                 default_dir: str = "", parent=None):
+                 default_dir: str = "", initial_settings: Optional[dict] = None,
+                 parent=None):
         super().__init__(parent)
         self.video_path = video_path
         self.source_info = source_info
         self.setWindowTitle("Export Clips")
         self.setMinimumWidth(480)
         self._settings_store = QSettings("VideoClipper", "VideoClipper")
+        init = initial_settings or {}
 
         total = sum(c.duration() for c in clips)
         first_clip_name = clips[0].name if clips else "Clip1"
@@ -57,7 +74,8 @@ class ExportSettingsDialog(QDialog):
 
         # -- output folder --------------------------------------------------
         folder_row = QHBoxLayout()
-        self.folder_edit = QLineEdit(default_dir or self._settings_store.value("last_dir", ""))
+        self.folder_edit = QLineEdit(
+            init.get("output_dir") or default_dir or self._settings_store.value("last_dir", ""))
         self.folder_edit.setPlaceholderText("Choose an output folder…")
         self.folder_edit.setReadOnly(True)
         browse_btn = QPushButton("Browse…")
@@ -72,7 +90,8 @@ class ExportSettingsDialog(QDialog):
         # -- container / codec ------------------------------------------------
         self.container_combo = QComboBox()
         self.container_combo.addItems(_CONTAINERS.keys())
-        last_container = self._settings_store.value("container", "MP4 (.mp4)")
+        last_container = (_container_label_for_ext(init.get("ext"))
+                          or self._settings_store.value("container", "MP4 (.mp4)"))
         if last_container in _CONTAINERS:
             self.container_combo.setCurrentText(last_container)
         self.container_combo.currentTextChanged.connect(self._on_container_changed)
@@ -86,7 +105,7 @@ class ExportSettingsDialog(QDialog):
         crf_row = QHBoxLayout()
         self.crf_slider = QSlider(Qt.Orientation.Horizontal)
         self.crf_slider.setRange(0, 51)
-        self.crf_slider.setValue(int(self._settings_store.value("crf", 20)))
+        self.crf_slider.setValue(int(init.get("crf", self._settings_store.value("crf", 20))))
         self.crf_value_label = QLabel(str(self.crf_slider.value()))
         self.crf_slider.valueChanged.connect(lambda v: self.crf_value_label.setText(str(v)))
         crf_row.addWidget(self.crf_slider, 1)
@@ -99,12 +118,14 @@ class ExportSettingsDialog(QDialog):
 
         self.preset_combo = QComboBox()
         self.preset_combo.addItems(_PRESETS)
-        self.preset_combo.setCurrentText(str(self._settings_store.value("preset", "medium")))
+        self.preset_combo.setCurrentText(str(init.get("preset", self._settings_store.value("preset", "medium"))))
         form.addRow("Encode speed", self.preset_combo)
 
         self.scale_combo = QComboBox()
         for label, _value in SCALE_CHOICES:
             self.scale_combo.addItem(label, _value)
+        if "scale" in init:
+            _select_by_data(self.scale_combo, init["scale"])
         form.addRow("Resolution", self.scale_combo)
 
         self.fps_combo = QComboBox()
@@ -115,28 +136,30 @@ class ExportSettingsDialog(QDialog):
         self.fps_combo.addItem(maintain_label, None)
         for label, _value, arg in FPS_CHOICES:
             self.fps_combo.addItem(f"{label} fps", arg)
+        if "fps_arg" in init:
+            _select_by_data(self.fps_combo, init["fps_arg"])
         form.addRow("Frame rate", self.fps_combo)
 
         # -- audio -----------------------------------------------------------
         self.audio_check = QCheckBox("Include audio")
-        self.audio_check.setChecked(True)
+        self.audio_check.setChecked(bool(init.get("include_audio", True)))
         self.audio_check.toggled.connect(self._on_audio_toggled)
         form.addRow("", self.audio_check)
 
+        self._preferred_audio_codec = init.get("audio_codec")
         self.audio_codec_combo = QComboBox()
         form.addRow("Audio codec", self.audio_codec_combo)
 
         self.audio_bitrate_combo = QComboBox()
         self.audio_bitrate_combo.addItems(["128k", "192k", "256k", "320k"])
-        self.audio_bitrate_combo.setCurrentText("192k")
+        self.audio_bitrate_combo.setCurrentText(str(init.get("audio_bitrate", "192k")))
         form.addRow("Audio bitrate", self.audio_bitrate_combo)
         self.audio_codec_combo.currentTextChanged.connect(self._on_audio_codec_changed)
 
         # -- filenames / metadata ---------------------------------------------
         self.include_video_name_check = QCheckBox("Include original video name in exported files")
-        self.include_video_name_check.setChecked(
-            bool(self._settings_store.value("include_video_name", True, type=bool))
-        )
+        self.include_video_name_check.setChecked(bool(init.get(
+            "include_video_name", self._settings_store.value("include_video_name", True, type=bool))))
         self.include_video_name_check.toggled.connect(self._update_filename_preview)
         form.addRow("", self.include_video_name_check)
 
@@ -145,9 +168,8 @@ class ExportSettingsDialog(QDialog):
         form.addRow("", self.filename_preview)
 
         self.save_metadata_check = QCheckBox("Save clip metadata (JSON: source info, export settings, clip times)")
-        self.save_metadata_check.setChecked(
-            bool(self._settings_store.value("save_metadata", True, type=bool))
-        )
+        self.save_metadata_check.setChecked(bool(init.get(
+            "save_metadata", self._settings_store.value("save_metadata", True, type=bool))))
         form.addRow("", self.save_metadata_check)
 
         root.addLayout(form)
@@ -169,7 +191,7 @@ class ExportSettingsDialog(QDialog):
 
         self._first_clip_name = first_clip_name
         self._on_container_changed(self.container_combo.currentText())
-        last_codec = self._settings_store.value("video_codec", "")
+        last_codec = init.get("video_codec") or self._settings_store.value("video_codec", "")
         codec_values = [self.codec_combo.itemData(i) for i in range(self.codec_combo.count())]
         if last_codec and last_codec in codec_values:
             self.codec_combo.setCurrentIndex(codec_values.index(last_codec))
@@ -190,6 +212,9 @@ class ExportSettingsDialog(QDialog):
     def _populate_audio_codecs(self, is_webm: bool):
         choices = _AUDIO_CODEC_CHOICES_WEBM if is_webm else _AUDIO_CODEC_CHOICES_DEFAULT
         current = self.audio_codec_combo.currentData()
+        if current is None and self._preferred_audio_codec is not None:
+            current = self._preferred_audio_codec
+            self._preferred_audio_codec = None
         self.audio_codec_combo.blockSignals(True)
         self.audio_codec_combo.clear()
         for text, data in choices:
