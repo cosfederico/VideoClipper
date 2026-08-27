@@ -111,13 +111,6 @@ class TimeDisplayWidget(QWidget):
         self._current_edit.setFocus(Qt.FocusReason.MouseFocusReason)
 
     def _commit_edit(self):
-        # Guard on a flag set *before* the side-effecting setCurrentWidget
-        # call below, not on currentWidget() identity: swapping stack pages
-        # makes the outgoing QLineEdit lose focus, which re-fires
-        # editingFinished as a nested call *during* that same
-        # setCurrentWidget() - by then the flag (set first) already reads
-        # False, so the guard catches it regardless of exactly when Qt
-        # decides currentWidget() itself has changed.
         if not self._editing:
             return
         self._editing = False
@@ -127,7 +120,7 @@ class TimeDisplayWidget(QWidget):
         if seconds is not None:
             self.time_edit_requested.emit(seconds)
         else:
-            self._refresh_current()  # invalid input - silently revert, matches clip rename's UX
+            self._refresh_current()  # invalid input - revert
 
     def _cancel_edit(self):
         if not self._editing:

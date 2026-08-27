@@ -31,10 +31,7 @@ _CODEC_LABELS = {
 _PRESETS = ["ultrafast", "superfast", "veryfast", "faster", "fast",
             "medium", "slow", "slower", "veryslow"]
 
-# WebM can only mux Vorbis/Opus audio, never AAC, so it gets its own,
-# narrower choice list (also no "Copy": we can't tell at dialog-build time
-# whether the source's audio is already Opus/Vorbis, and guessing wrong
-# would fail at export time same as picking AAC does).
+# WebM can only mux Vorbis/Opus audio, never AAC.
 _AUDIO_CODEC_CHOICES_DEFAULT = [("AAC", "aac"), ("Copy", "copy")]
 _AUDIO_CODEC_CHOICES_WEBM = [("Opus", WEBM_AUDIO_CODEC)]
 
