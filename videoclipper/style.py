@@ -137,6 +137,13 @@ QComboBox QAbstractItemView {{
     selection-background-color: {ACCENT};
 }}
 
+QTextBrowser {{
+    background: {BG1};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 12px;
+}}
+
 QCheckBox {{ spacing: 8px; }}
 QCheckBox::indicator {{
     width: 16px; height: 16px;
