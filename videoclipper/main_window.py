@@ -4,14 +4,15 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from PyQt6.QtCore import QEvent, Qt, QTimer
-from PyQt6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
+from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer
+from PyQt6.QtGui import QAction, QColor, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QApplication, QColorDialog, QDialog, QFileDialog, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollBar, QSlider,
-    QSplitter, QToolButton, QVBoxLayout, QWidget,
+    QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollBar,
+    QSlider, QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
+from . import project as project_file
 from .clip_list import ClipListPanel
 from .export_dialog import ExportProgressDialog, ExportSettingsDialog
 from .media_utils import Exporter, ProbeWorker, ThumbnailWorker
@@ -20,6 +21,10 @@ from .time_display import TimeDisplayWidget
 from .timeline_widget import MAX_ZOOM, MIN_CLIP_LEN, MIN_ZOOM, TimelineWidget
 from .utils import format_fps, format_time, random_pleasant_color
 from .video_widget import VideoViewport
+
+_ORG, _APP = "VideoClipper", "VideoClipper"
+_RECENT_PROJECTS_KEY = "recent_projects"
+_MAX_RECENT_PROJECTS = 10
 
 _SCROLLBAR_SCALE = 1000  # seconds -> integer units for the QScrollBar (millisecond resolution)
 
@@ -40,7 +45,9 @@ class MainWindow(QMainWindow):
         self.clips: List[Clip] = []
         self.pending_start: Optional[float] = None
         self._clip_name_counter = 0
-        self._dirty = False  # True when clips exist that haven't been exported yet
+        self._dirty = False  # True when clips exist that haven't been exported/saved yet
+        self.project_path: Optional[str] = None
+        self.last_export_settings: Optional[dict] = None
         self._active_clip_end: Optional[float] = None  # auto-pause point set by clicking a clip card
         # Lists, not a dict keyed by clip_id: a clip can be re-thumbnailed
         # (e.g. resized twice quickly) while an earlier request for the same
@@ -58,7 +65,34 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
+    def _build_menu(self):
+        file_menu = self.menuBar().addMenu("&File")
+
+        self.open_video_action = QAction("Open Video...", self)
+        file_menu.addAction(self.open_video_action)
+
+        file_menu.addSeparator()
+
+        self.save_project_action = QAction("Save Project JSON...", self)
+        self.save_project_action.setShortcut(QKeySequence("Ctrl+S"))
+        file_menu.addAction(self.save_project_action)
+
+        self.open_project_action = QAction("Open Project JSON...", self)
+        file_menu.addAction(self.open_project_action)
+
+        self.recent_menu = QMenu("Open Recent", self)
+        file_menu.addMenu(self.recent_menu)
+
+        self.clear_recent_action = QAction("Clear Recent Projects", self)
+        file_menu.addAction(self.clear_recent_action)
+
+        file_menu.addSeparator()
+
+        self.exit_action = QAction("Exit", self)
+        file_menu.addAction(self.exit_action)
+
     def _build_ui(self):
+        self._build_menu()
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
@@ -208,6 +242,13 @@ class MainWindow(QMainWindow):
         self.statusBar()
 
     def _wire_signals(self):
+        self.open_video_action.triggered.connect(self.open_video_dialog)
+        self.save_project_action.triggered.connect(self.save_project)
+        self.open_project_action.triggered.connect(self.open_project_dialog)
+        self.recent_menu.aboutToShow.connect(self._rebuild_recent_menu)
+        self.clear_recent_action.triggered.connect(self._clear_recent_projects)
+        self.exit_action.triggered.connect(self.close)
+
         self.open_video_btn.clicked.connect(self.open_video_dialog)
         self.viewport.open_requested.connect(self.open_video_dialog)
         self.viewport.position_changed.connect(self._on_position_changed)
@@ -316,15 +357,24 @@ class MainWindow(QMainWindow):
         self.video_path = path
         self.source_info = None
         self.viewport.load(path)
-        self.setWindowTitle(f"VideoClipper — {os.path.basename(path)}")
+        self._update_window_title()
         self.statusBar().showMessage("Video loaded.", 3000)
         self._probe_source(path)
+
+    def _update_window_title(self):
+        name = None
+        if self.project_path:
+            name = os.path.basename(self.project_path)
+        elif self.video_path:
+            name = os.path.basename(self.video_path)
+        self.setWindowTitle(f"VideoClipper — {name}" if name else "VideoClipper")
 
     def _reset_clips(self):
         self.clip_panel.clear()
         self.timeline.reset()
         self.clips = []
         self.pending_start = None
+        self.project_path = None
         self._clip_name_counter = 0
         self._dirty = False
         self._active_clip_end = None
@@ -335,6 +385,123 @@ class MainWindow(QMainWindow):
         self.zoom_in_btn.setEnabled(False)
         self.zoom_fit_btn.setEnabled(False)
         self.pan_scrollbar.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # Project save/load
+    # ------------------------------------------------------------------
+    def save_project(self):
+        if self.project_path:
+            self._save_project_to(self.project_path)
+        else:
+            self._save_project_as()
+
+    def _save_project_as(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Project", self.project_path or "", "VideoClipper Project (*.json)")
+        if not path:
+            return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        self._save_project_to(path)
+
+    def _save_project_to(self, path: str):
+        try:
+            project_file.save_project(
+                path, self.video_path, self.clips, self._clip_name_counter,
+                self.last_export_settings)
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", f"Could not save the project:\n{exc}")
+            return
+        self.project_path = path
+        self._dirty = False
+        self._add_recent_project(path)
+        self._update_window_title()
+        self.statusBar().showMessage(f"Project saved to {path}", 4000)
+
+    def open_project_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Project", "", "VideoClipper Project (*.json);;All Files (*)")
+        if path:
+            self._open_project_from_path(path)
+
+    def _open_project_from_path(self, path: str):
+        if not self._confirm_discard_if_needed("open a different project"):
+            return
+        try:
+            data = project_file.load_project(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Open project failed", f"Could not open '{path}':\n{exc}")
+            self._remove_recent_project(path)
+            return
+
+        self._reset_clips()
+        self.project_path = path
+        self._clip_name_counter = data["clip_name_counter"]
+        self.last_export_settings = data["export_settings"]
+
+        saved_video_path = data["video_path"]
+        if saved_video_path and os.path.exists(saved_video_path):
+            self.video_path = saved_video_path
+            self.source_info = None
+            self.viewport.load(self.video_path)
+            self._probe_source(self.video_path)
+        else:
+            self.video_path = None
+            if saved_video_path:
+                QMessageBox.warning(
+                    self, "Video not found",
+                    f"The project's video could not be found:\n{saved_video_path}\n\n"
+                    "The saved clips are still loaded - use Open Video to relink it.")
+            if data["clips"]:
+                self.timeline.set_duration(max(c.end for c in data["clips"]) * 1.05)
+
+        for clip in data["clips"]:
+            self.clips.append(clip)
+            self.timeline.add_clip(clip)
+            self.clip_panel.add_clip(clip)
+            if self.video_path:
+                self._request_thumbnail(clip)
+
+        if self.clips:
+            self.export_btn.setEnabled(True)
+            self.export_btn.setToolTip("")
+        self._dirty = False
+        self._add_recent_project(path)
+        self._update_window_title()
+        self.statusBar().showMessage(f"Project loaded from {path}", 4000)
+
+    # -- recent projects -------------------------------------------------
+    def _rebuild_recent_menu(self):
+        self.recent_menu.clear()
+        recents = self._get_recent_projects()
+        if not recents:
+            empty_action = QAction("(No recent projects)", self.recent_menu)
+            empty_action.setEnabled(False)
+            self.recent_menu.addAction(empty_action)
+            return
+        for path in recents:
+            action = QAction(path, self.recent_menu)
+            action.triggered.connect(lambda checked=False, p=path: self._open_project_from_path(p))
+            self.recent_menu.addAction(action)
+
+    @staticmethod
+    def _get_recent_projects() -> List[str]:
+        raw = QSettings(_ORG, _APP).value(_RECENT_PROJECTS_KEY, [])
+        if isinstance(raw, str):
+            raw = [raw] if raw else []
+        return list(raw or [])
+
+    def _add_recent_project(self, path: str):
+        recents = [p for p in self._get_recent_projects() if p != path]
+        recents.insert(0, path)
+        QSettings(_ORG, _APP).setValue(_RECENT_PROJECTS_KEY, recents[:_MAX_RECENT_PROJECTS])
+
+    def _remove_recent_project(self, path: str):
+        recents = [p for p in self._get_recent_projects() if p != path]
+        QSettings(_ORG, _APP).setValue(_RECENT_PROJECTS_KEY, recents)
+
+    def _clear_recent_projects(self):
+        QSettings(_ORG, _APP).setValue(_RECENT_PROJECTS_KEY, [])
 
     def _probe_source(self, path: str):
         worker = ProbeWorker(path)
@@ -644,11 +811,13 @@ class MainWindow(QMainWindow):
         if not self.clips or not self.video_path:
             return
         dialog = ExportSettingsDialog(
-            self.clips, video_path=self.video_path, source_info=self.source_info, parent=self)
+            self.clips, video_path=self.video_path, source_info=self.source_info,
+            initial_settings=self.last_export_settings, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._start_export(dialog.get_settings())
 
     def _start_export(self, settings: dict):
+        self.last_export_settings = settings
         clips_sorted = sorted(self.clips, key=lambda c: c.start)
         self._progress_dialog = ExportProgressDialog(len(clips_sorted), parent=self)
 

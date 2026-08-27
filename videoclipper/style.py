@@ -248,6 +248,19 @@ QProgressBar::chunk {{
     border-radius: 7px;
 }}
 
+QMenuBar {{
+    background: {BG1};
+    border-bottom: 1px solid {BORDER};
+    padding: 2px 4px;
+}}
+QMenuBar::item {{
+    padding: 5px 10px;
+    border-radius: 4px;
+    background: transparent;
+}}
+QMenuBar::item:selected {{ background: {BG3}; }}
+QMenuBar::item:pressed {{ background: {ACCENT}; color: white; }}
+
 QMenu {{
     background: {BG2};
     border: 1px solid {BORDER};
