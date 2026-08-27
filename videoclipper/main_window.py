@@ -20,7 +20,7 @@ from .media_utils import Exporter, ProbeWorker, ThumbnailWorker
 from .models import Clip, SourceInfo
 from .time_display import TimeDisplayWidget
 from .timeline_widget import MAX_ZOOM, MIN_CLIP_LEN, MIN_ZOOM, TimelineWidget
-from .utils import format_fps, format_time, random_pleasant_color
+from .utils import VIDEO_EXTENSIONS, format_fps, format_time, random_pleasant_color
 from .video_widget import VideoViewport
 
 _ORG, _APP = "VideoClipper", "VideoClipper"
@@ -30,7 +30,7 @@ _MAX_RECENT_PROJECTS = 10
 _SCROLLBAR_SCALE = 1000  # seconds -> integer units for the QScrollBar (millisecond resolution)
 
 _VIDEO_FILTER = (
-    "Video Files (*.mp4 *.mkv *.avi *.mov *.webm *.m4v *.wmv *.flv *.mpg *.mpeg *.ts);;"
+    "Video Files (" + " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS) + ");;"
     "All Files (*)"
 )
 
@@ -256,6 +256,7 @@ class MainWindow(QMainWindow):
 
         self.open_video_btn.clicked.connect(self.open_video_dialog)
         self.viewport.open_requested.connect(self.open_video_dialog)
+        self.viewport.video_dropped.connect(self._try_load_video)
         self.viewport.position_changed.connect(self._on_position_changed)
         self.viewport.duration_changed.connect(self._on_duration_changed)
         self.viewport.playing_changed.connect(self._on_playing_changed)
@@ -351,11 +352,14 @@ class MainWindow(QMainWindow):
     # Opening a video
     # ------------------------------------------------------------------
     def open_video_dialog(self):
-        if not self._confirm_discard_if_needed("open another video"):
-            return
         path, _ = QFileDialog.getOpenFileName(self, "Open video", "", _VIDEO_FILTER)
         if path:
-            self._load_video(path)
+            self._try_load_video(path)
+
+    def _try_load_video(self, path: str):
+        if not self._confirm_discard_if_needed("open another video"):
+            return
+        self._load_video(path)
 
     def _load_video(self, path: str):
         self._reset_clips()

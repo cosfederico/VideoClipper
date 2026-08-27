@@ -28,9 +28,10 @@ python videoclipper.py
 
 ## Using it
 
-1. Click **Open Video** (top left, or the big button in the viewport) and
-   pick a file. It loads paused, on the first frame. Opening another video
-   later replaces the current one — if you have clips that haven't been
+1. Click **Open Video** (top left, or the big button in the viewport), or
+   drag and drop a video file onto the viewport, to load it — it loads
+   paused, on the first frame. Opening another video later (via either
+   method) replaces the current one — if you have clips that haven't been
    exported yet, you'll be asked to confirm first (same on quitting the app).
 2. Scrub the timeline (click/drag) or press **Space** to play/pause.
 3. Press **I** (or click **Set In**) at the point you want a clip to start.

@@ -39,7 +39,8 @@ _HELP_HTML = f"""
 
 <h3>Basics</h3>
 <ul>
-  <li><b>Open Video</b> loads a file, paused on its first frame.</li>
+  <li><b>Open Video</b> (or drag and drop a video onto the viewport)
+      loads a file, paused on its first frame.</li>
   <li>Click or drag the timeline to scrub; the ruler and playhead follow.</li>
   <li>Set <b>In</b> then <b>Out</b> to create a clip - clips can't overlap.</li>
   <li>Drag a clip's edge to trim it; the viewport follows the handle.</li>

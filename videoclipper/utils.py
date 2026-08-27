@@ -6,6 +6,9 @@ import random
 import re
 from typing import Optional
 
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v",
+                     ".wmv", ".flv", ".mpg", ".mpeg", ".ts")
+
 
 def format_time(seconds: float, always_hours: bool = False) -> str:
     """Format a second count as M:SS or H:MM:SS."""
