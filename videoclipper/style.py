@@ -197,6 +197,13 @@ QLabel#muted {{ color: {MUTED}; }}
 QLabel#sectionLabel {{ color: {MUTED}; font-size: 11px; font-weight: 600; }}
 QLabel#warningLabel {{ color: #f4b860; }}
 
+QLabel#timeCurrent {{
+    font-weight: 600;
+    padding: 2px 5px;
+    border-radius: 4px;
+}}
+QLabel#timeCurrent:hover {{ background: {BG2}; }}
+
 QScrollArea {{ border: none; background: transparent; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
 
@@ -210,6 +217,17 @@ QScrollBar::handle:vertical {{
     min-height: 24px;
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 10px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {BG3};
+    border-radius: 5px;
+    min-width: 24px;
+}}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 
 QStatusBar {{
     background: {BG1};

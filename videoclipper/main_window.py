@@ -16,6 +16,7 @@ from .clip_list import ClipListPanel
 from .export_dialog import ExportProgressDialog, ExportSettingsDialog
 from .media_utils import Exporter, ProbeWorker, ThumbnailWorker
 from .models import Clip, SourceInfo
+from .time_display import TimeDisplayWidget
 from .timeline_widget import MAX_ZOOM, MIN_ZOOM, TimelineWidget
 from .utils import format_fps, format_time, random_pleasant_color
 from .video_widget import VideoViewport
@@ -122,8 +123,8 @@ class MainWindow(QMainWindow):
         self.volume_slider.setEnabled(False)
         self.volume_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        self.time_label = QLabel("0:00 / 0:00")
-        self.time_label.setObjectName("muted")
+        self.time_display = TimeDisplayWidget()
+        self.time_display.setEnabled(False)
 
         self.start_btn = QPushButton("Set In  (I)")
         self.start_btn.setObjectName("markerStart")
@@ -140,8 +141,12 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.play_btn)
         controls_row.addWidget(self.mute_btn)
         controls_row.addWidget(self.volume_slider)
-        controls_row.addWidget(self.time_label)
-        controls_row.addStretch(1)
+        # time_display carries its own internal stretch on both sides, so
+        # giving it the remaining space (rather than a fixed size) keeps the
+        # time text centered in the row instead of stuck next to the volume
+        # controls - not "next to audio", genuinely centered regardless of
+        # how wide play/mute/volume vs. Set In/Out end up being.
+        controls_row.addWidget(self.time_display, 1)
         controls_row.addWidget(self.start_btn)
         controls_row.addWidget(self.end_btn)
         left_layout.addLayout(controls_row)
@@ -221,6 +226,7 @@ class MainWindow(QMainWindow):
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
         self.start_btn.clicked.connect(self.on_set_start)
         self.end_btn.clicked.connect(self.on_set_end)
+        self.time_display.time_edit_requested.connect(self._on_seek_requested)
 
         self.timeline.seek_requested.connect(self._on_seek_requested)
         self.timeline.clip_renamed.connect(self.rename_clip)
@@ -260,23 +266,42 @@ class MainWindow(QMainWindow):
             bind("Down", lambda: self._step_frame(-1)),
             bind("Home", lambda: self._safe_seek(0.0)),
             bind("End", lambda: self._safe_seek(self.viewport.duration())),
+            bind("Del", self._shortcut_delete_selected_clip),
         ]
 
         # QShortcut's default WindowShortcut context steals a matching key
         # before it ever reaches a focused widget's own keyPressEvent -
-        # unlike QLineEdit, QScrollBar doesn't claim these keys for itself
-        # via a ShortcutOverride, so without this, tabbing onto the pan
-        # scrollbar and pressing Left/Right/Up/Down/Home/End would do
-        # *nothing* (not even scroll it) instead of panning it. Disable the
-        # shortcuts outright while it has focus so the keys reach it.
-        self.pan_scrollbar.installEventFilter(self)
+        # QLineEdit only claims a handful of keys for itself via
+        # ShortcutOverride (Delete/Backspace/Home/End/arrows - confirmed
+        # empirically, not just from docs) and Escape isn't one of them;
+        # QScrollBar doesn't claim any of its keys this way at all. Without
+        # this, Escape could never reach - and therefore never cancel - the
+        # clip-rename box or the time-edit field (an *existing* bug, not
+        # introduced by adding the time-edit field, just newly noticed
+        # building it), and tabbing onto the pan scrollbar and pressing
+        # Left/Right/Up/Down/Home/End would do *nothing* (not even scroll
+        # it) instead of panning it. QApplication.focusChanged fires for
+        # every focus change app-wide, including into QLineEdits created
+        # later (the rename box is a fresh instance per rename) - a
+        # per-widget event filter would need reinstalling on each one.
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
+
+        # Global "click anywhere clears the timeline selection" - installed
+        # on the whole application (not just one widget) since the click can
+        # land on literally anything: a button, the viewport, a clip card...
+        # Clicks on the timeline itself are excluded because it already
+        # manages selection in its own mousePressEvent (selecting whatever
+        # was clicked, or clearing it for an empty-track click).
+        QApplication.instance().installEventFilter(self)
+
+    def _on_focus_changed(self, _old, _new):
+        self._set_shortcuts_enabled(not self._input_widget_has_focus())
 
     def eventFilter(self, obj, event):
-        if obj is self.pan_scrollbar:
-            if event.type() == QEvent.Type.FocusIn:
-                self._set_shortcuts_enabled(False)
-            elif event.type() == QEvent.Type.FocusOut:
-                self._set_shortcuts_enabled(True)
+        if event.type() == QEvent.Type.MouseButtonPress and self.timeline.selected_clip_id is not None:
+            target = obj if isinstance(obj, QWidget) else None
+            if target is not None and target is not self.timeline and not self.timeline.isAncestorOf(target):
+                self.timeline.clear_selection()
         return super().eventFilter(obj, event)
 
     def _set_shortcuts_enabled(self, enabled: bool):
@@ -348,6 +373,7 @@ class MainWindow(QMainWindow):
 
     def _on_source_probed(self, info: SourceInfo):
         self.source_info = info
+        self.time_display.set_fps(info.fps)
         if info.width and info.height:
             extra = f" ({info.width}x{info.height}"
             if info.fps:
@@ -357,11 +383,12 @@ class MainWindow(QMainWindow):
 
     def _on_duration_changed(self, seconds: float):
         self.timeline.set_duration(seconds)
-        self._update_time_label()
+        self.time_display.set_duration(seconds)
         if self.video_path:
             self.play_btn.setEnabled(True)
             self.mute_btn.setEnabled(True)
             self.volume_slider.setEnabled(True)
+            self.time_display.setEnabled(True)
             self.start_btn.setEnabled(self.pending_start is None)
             self.end_btn.setEnabled(self.pending_start is not None)
             self.zoom_in_btn.setEnabled(True)
@@ -391,7 +418,7 @@ class MainWindow(QMainWindow):
 
     def _on_position_changed(self, seconds: float):
         self.timeline.set_position(seconds)
-        self._update_time_label()
+        self.time_display.set_current(seconds)
         if self._active_clip_end is not None and seconds >= self._active_clip_end:
             self._active_clip_end = None
             self.viewport.pause()
@@ -413,12 +440,6 @@ class MainWindow(QMainWindow):
         muted = value == 0
         self.viewport.set_muted(muted)
         self.mute_btn.setText("🔇" if muted else "🔊")
-
-    def _update_time_label(self):
-        self.time_label.setText(
-            f"{format_time(self.viewport.current_position())} / "
-            f"{format_time(self.viewport.duration())}"
-        )
 
     # ------------------------------------------------------------------
     # Marker placement (start -> end -> new clip)
@@ -532,12 +553,6 @@ class MainWindow(QMainWindow):
         clip = self._clip_by_id(clip_id)
         if not clip:
             return
-        answer = QMessageBox.question(
-            self, "Delete clip", f"Delete '{clip.name}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
         self.clips = [c for c in self.clips if c.id != clip_id]
         self.timeline.remove_clip(clip_id)
         self.clip_panel.remove_clip(clip_id)
@@ -622,6 +637,13 @@ class MainWindow(QMainWindow):
         self.viewport.pause()  # frame-stepping only makes sense paused
         fps = self.source_info.fps if self.source_info and self.source_info.fps else 30.0
         self.viewport.seek(self.viewport.current_position() + delta_frames / fps)
+
+    def _shortcut_delete_selected_clip(self):
+        if self._input_widget_has_focus():
+            return
+        clip_id = self.timeline.selected_clip_id
+        if clip_id is not None:
+            self.delete_clip(clip_id)
 
     # ------------------------------------------------------------------
     # Export

@@ -40,12 +40,19 @@ python videoclipper.py
 5. Drag either edge of a clip's block to trim it — the viewport follows the
    handle so you can see exactly where you're cutting. A trim is clamped so
    it can never cross into a neighboring clip.
-6. Double-click a clip's block on the timeline (or its name in the right
-   panel) to rename it. Right-click a block for rename/recolor/delete.
+6. Click a clip's block on the timeline to select it (it highlights);
+   press **Del** to delete it — no confirmation prompt. Click empty track,
+   or anywhere else in the window, to deselect. Double-click a block (or a
+   clip's name in the right panel) to rename it; right-click a block for
+   rename/recolor/delete.
 7. Click a clip card on the right to jump the viewport to that clip's start
    and play it — playback auto-pauses at the clip's end. Any manual seek
    (dragging the timeline, arrow keys, Home/End) cancels that auto-stop.
 8. Use the speaker button and slider next to Play to control volume/mute.
+   The time readout in the middle shows `current / total` down to the
+   frame (`2:10.15` = 2 minutes 10 seconds, frame 15) — click the current
+   time to type a new one (same format, or plain seconds) and jump there
+   frame-accurately; Escape or an unparsable value cancels without seeking.
 9. Zoom the timeline with the mouse wheel (zooms in on whatever's under the
    cursor), Shift+wheel to pan left/right once zoomed in, or use the
    **−** / **+** / **Fit** buttons below the timeline (which zoom around the
@@ -72,6 +79,7 @@ python videoclipper.py
 | Shift+←/→ | Seek 1s back/forward |
 | ↑/↓ | Step one frame forward/back (pauses) |
 | Home/End | Jump to start/end |
+| Del | Delete the selected clip (no confirmation) |
 
 ## Notes on export settings
 

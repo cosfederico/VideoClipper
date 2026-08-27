@@ -50,6 +50,7 @@ class TimelineWidget(QWidget):
     clip_resizing = pyqtSignal(int, float, float)   # live, while dragging an edge
     clip_resized = pyqtSignal(int, float, float)    # once, on release
     view_changed = pyqtSignal(float, float, float)  # zoom, view_start, duration
+    selection_changed = pyqtSignal(object)          # clip id (int), or None when cleared
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,6 +63,7 @@ class TimelineWidget(QWidget):
         self.position = 0.0
         self.pending_start: Optional[float] = None
         self.clips: List[Clip] = []
+        self.selected_clip_id: Optional[int] = None
 
         # zoom/pan: the widget always maps [view_start, view_start + visible
         # duration] to its width. zoom == MIN_ZOOM means visible duration ==
@@ -107,10 +109,23 @@ class TimelineWidget(QWidget):
 
     def remove_clip(self, clip_id: int):
         self.clips = [c for c in self.clips if c.id != clip_id]
+        if self.selected_clip_id == clip_id:
+            self._set_selection(None)
         self.update()
 
     def update_clip(self, clip: Clip):
         self.update()
+
+    # -- selection ----------------------------------------------------
+    def _set_selection(self, clip_id: Optional[int]):
+        if clip_id == self.selected_clip_id:
+            return
+        self.selected_clip_id = clip_id
+        self.update()
+        self.selection_changed.emit(clip_id)
+
+    def clear_selection(self):
+        self._set_selection(None)
 
     def reset(self):
         self.clips = []
@@ -119,6 +134,7 @@ class TimelineWidget(QWidget):
         self.position = 0.0
         self.zoom = MIN_ZOOM
         self.view_start = 0.0
+        self._set_selection(None)
         self._resizing_clip = None
         self._resizing_edge = None
         self.update()
@@ -272,10 +288,18 @@ class TimelineWidget(QWidget):
 
     def _draw_clip(self, painter: QPainter, clip: Clip):
         rect = QRectF(self._clip_rect(clip))
+        is_selected = clip.id == self.selected_clip_id
         color = QColor(*clip.color)
         painter.setBrush(color)
-        painter.setPen(QPen(color.lighter(135), 1.4))
+        painter.setPen(QPen(QColor("#ffffff") if is_selected else color.lighter(135),
+                             2.6 if is_selected else 1.4))
         painter.drawRoundedRect(rect, 5, 5)
+
+        if is_selected:
+            # a soft outer halo so selection reads clearly even for pale clip colors
+            painter.setPen(QPen(QColor(255, 255, 255, 90), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(-3, -3, 3, 3), 7, 7)
 
         text_color = QColor("#101116") if color.lightnessF() > 0.62 else QColor("#f5f6f8")
         painter.setPen(text_color)
@@ -331,15 +355,19 @@ class TimelineWidget(QWidget):
         if event.button() == Qt.MouseButton.RightButton:
             clip = self._clip_at(event.position().toPoint())
             if clip:
+                self._set_selection(clip.id)
                 self._show_context_menu(clip, event.globalPosition().toPoint())
             return
         if event.button() == Qt.MouseButton.LeftButton:
             clip, edge = self._edge_at(event.position().toPoint())
             if clip is not None:
+                self._set_selection(clip.id)
                 self._resizing_clip = clip
                 self._resizing_edge = edge
                 self._resize_lower, self._resize_upper = self._neighbor_bounds(clip)
                 return
+            clicked_clip = self._clip_at(event.position().toPoint())
+            self._set_selection(clicked_clip.id if clicked_clip else None)
             self._dragging = True
             self.seek_requested.emit(self._t_for(event.position().x()))
 
