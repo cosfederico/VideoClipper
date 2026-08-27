@@ -1,25 +1,14 @@
 """Video probing, thumbnail extraction, and clip export - all via PyAV.
 
-PyAV (the `av` package) wraps FFmpeg's libraries directly as compiled
-Python bindings; its wheels statically bundle libavformat/libavcodec/
-libswscale/libswresample/libavfilter, so there is no system ffmpeg/ffprobe
-binary to find, no PATH lookup, no imageio-ffmpeg fallback, and no
-subprocess/stderr-parsing. Playback (video_widget.py) is unaffected by
-this module - it already used Qt's own multimedia backend, never the
-ffmpeg CLI.
+PyAV bundles FFmpeg's libraries directly, so there's no system ffmpeg
+binary, PATH lookup, or subprocess involved. Playback (video_widget.py)
+uses Qt's own multimedia backend and is unaffected.
 
-Two PyAV/libavcodec gotchas worth knowing before touching this file (see
-CLAUDE.md for the fuller writeup):
-
-- An output video stream's `width`/`height` must be set EXPLICITLY before
-  the first `encode()` call. Leaving them unset does not raise - the
-  encoder silently opens at 640x480 instead of inferring the size from the
-  frames it's handed, and you get a wrong-resolution file with no error.
+Two PyAV/libavcodec gotchas - see CLAUDE.md for details:
+- An output video stream's `width`/`height` must be set explicitly before
+  the first `encode()` call, or it silently opens at 640x480.
 - `Container.seek(offset, stream=X, ...)` interprets `offset` in stream
-  X's `time_base`, not the container's `av.time_base` (microseconds). Pass
-  no `stream=` (the default, container-wide seek) and use `av.time_base`
-  units, or convert explicitly (`int(seconds / stream.time_base)`) if you
-  do need a stream-specific seek.
+  X's `time_base`, not `av.time_base` - omit `stream=` unless converting.
 """
 from __future__ import annotations
 
@@ -61,14 +50,9 @@ SCALE_CHOICES = [
 # WebM can only mux Vorbis/Opus audio, never AAC - this is the sole audio
 # codec choice offered when the container is WebM (see export_dialog.py).
 WEBM_AUDIO_CODEC = "libopus"
-_OPUS_RATE = 48000  # Opus only accepts 8k/12k/16k/24k/48k; anything else
-                     # makes avcodec_open2 fail outright, so this is forced
-                     # regardless of the source's actual sample rate.
+_OPUS_RATE = 48000  # Opus only accepts 8k/12k/16k/24k/48k
 
-_SEEK_LOOKBACK = 5.0  # seconds; how far before the target we allow a
-                       # stream-copy packet to originate from, as a sanity
-                       # bound - not a real limit, container seeks land
-                       # within a few GOPs of the target in practice.
+_SEEK_LOOKBACK = 5.0  # seconds of slack before base_offset to still accept a packet
 
 
 def probe_video(video_path: str) -> SourceInfo:
@@ -199,9 +183,9 @@ class Exporter(QThread):
             except _ExportError as exc:
                 self.finished_all.emit(False, f"{exc} while exporting '{clip.name}'.")
                 return
-            except Exception as exc:  # pragma: no cover - defensive: never let this
+            except Exception as exc:
                 self.finished_all.emit(False, f"Failed exporting '{clip.name}': {exc}")
-                return                # cross the QThread boundary uncaught.
+                return
 
             if self._cancelled:
                 self.finished_all.emit(False, "Export cancelled.")
@@ -227,12 +211,8 @@ class Exporter(QThread):
 
     # ------------------------------------------------------------------
     def _peek_copy_start_t(self, in_v_index: int, start: float) -> float:
-        """Stream-copy mode can't decode, so it can't cut on an arbitrary
-        frame - it snaps to the nearest keyframe at or before `start`, same
-        trade-off as ffmpeg's `-ss` before `-i` with `-c copy`. Peek (via a
-        second, throwaway open) to learn where that keyframe actually is,
-        so both audio and video packets can be rebased to the same zero
-        point and stay in sync."""
+        """Find the keyframe at/before `start` that stream-copy mode will
+        actually cut on, via a second throwaway open."""
         peek = av.open(self.source_path)
         try:
             v = peek.streams.video[in_v_index]
@@ -358,10 +338,7 @@ class Exporter(QThread):
             out_v = out_c.add_stream(video_codec, rate=target_fps)
         except Exception as exc:
             raise _ExportError(f"Could not start the '{video_codec}' encoder ({exc})")
-        # PyAV/libavcodec gotcha: width/height must be set explicitly before
-        # the first encode() call, or the encoder silently opens at 640x480
-        # instead of inferring the size from the frames it's given.
-        out_v.width, out_v.height = out_w, out_h
+        out_v.width, out_v.height = out_w, out_h  # must be set before encode() - see module docstring
         out_v.pix_fmt = "yuv420p"
 
         opts = {}

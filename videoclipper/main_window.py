@@ -17,7 +17,7 @@ from .export_dialog import ExportProgressDialog, ExportSettingsDialog
 from .media_utils import Exporter, ProbeWorker, ThumbnailWorker
 from .models import Clip, SourceInfo
 from .time_display import TimeDisplayWidget
-from .timeline_widget import MAX_ZOOM, MIN_ZOOM, TimelineWidget
+from .timeline_widget import MAX_ZOOM, MIN_CLIP_LEN, MIN_ZOOM, TimelineWidget
 from .utils import format_fps, format_time, random_pleasant_color
 from .video_widget import VideoViewport
 
@@ -141,12 +141,7 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.play_btn)
         controls_row.addWidget(self.mute_btn)
         controls_row.addWidget(self.volume_slider)
-        # time_display carries its own internal stretch on both sides, so
-        # giving it the remaining space (rather than a fixed size) keeps the
-        # time text centered in the row instead of stuck next to the volume
-        # controls - not "next to audio", genuinely centered regardless of
-        # how wide play/mute/volume vs. Set In/Out end up being.
-        controls_row.addWidget(self.time_display, 1)
+        controls_row.addWidget(self.time_display, 1)  # stretch factor centers it in the row
         controls_row.addWidget(self.start_btn)
         controls_row.addWidget(self.end_btn)
         left_layout.addLayout(controls_row)
@@ -154,10 +149,7 @@ class MainWindow(QMainWindow):
         self.timeline = TimelineWidget()
         left_layout.addWidget(self.timeline)
 
-        # Only shown once zoomed in - at zoom 1.0 the whole clip is already
-        # visible, so there's nothing to scroll. Keyboard-focusable (Tab
-        # onto it, then Left/Right/PageUp/PageDown/Home/End) so panning
-        # doesn't require the mouse.
+        # Shown only once zoomed in; keyboard-focusable so panning doesn't need a mouse.
         self.pan_scrollbar = QScrollBar(Qt.Orientation.Horizontal)
         self.pan_scrollbar.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.pan_scrollbar.setCursor(Qt.CursorShape.ArrowCursor)
@@ -235,6 +227,7 @@ class MainWindow(QMainWindow):
         self.timeline.clip_resizing.connect(self._on_clip_resizing)
         self.timeline.clip_resized.connect(self._on_clip_resized)
         self.timeline.view_changed.connect(self._on_view_changed)
+        self.timeline.selection_changed.connect(self._update_marker_buttons)
 
         self.zoom_out_btn.clicked.connect(self.timeline.zoom_out)
         self.zoom_in_btn.clicked.connect(self.timeline.zoom_in)
@@ -269,29 +262,9 @@ class MainWindow(QMainWindow):
             bind("Del", self._shortcut_delete_selected_clip),
         ]
 
-        # QShortcut's default WindowShortcut context steals a matching key
-        # before it ever reaches a focused widget's own keyPressEvent -
-        # QLineEdit only claims a handful of keys for itself via
-        # ShortcutOverride (Delete/Backspace/Home/End/arrows - confirmed
-        # empirically, not just from docs) and Escape isn't one of them;
-        # QScrollBar doesn't claim any of its keys this way at all. Without
-        # this, Escape could never reach - and therefore never cancel - the
-        # clip-rename box or the time-edit field (an *existing* bug, not
-        # introduced by adding the time-edit field, just newly noticed
-        # building it), and tabbing onto the pan scrollbar and pressing
-        # Left/Right/Up/Down/Home/End would do *nothing* (not even scroll
-        # it) instead of panning it. QApplication.focusChanged fires for
-        # every focus change app-wide, including into QLineEdits created
-        # later (the rename box is a fresh instance per rename) - a
-        # per-widget event filter would need reinstalling on each one.
+        # Disables shortcuts while a text field/scrollbar has focus (see CLAUDE.md).
         QApplication.instance().focusChanged.connect(self._on_focus_changed)
-
-        # Global "click anywhere clears the timeline selection" - installed
-        # on the whole application (not just one widget) since the click can
-        # land on literally anything: a button, the viewport, a clip card...
-        # Clicks on the timeline itself are excluded because it already
-        # manages selection in its own mousePressEvent (selecting whatever
-        # was clicked, or clearing it for an empty-track click).
+        # Clears the timeline selection on any click outside the timeline.
         QApplication.instance().installEventFilter(self)
 
     def _on_focus_changed(self, _old, _new):
@@ -355,8 +328,7 @@ class MainWindow(QMainWindow):
         self._clip_name_counter = 0
         self._dirty = False
         self._active_clip_end = None
-        self.start_btn.setEnabled(True)
-        self.end_btn.setEnabled(False)
+        self._update_marker_buttons()
         self.export_btn.setEnabled(False)
         self.export_btn.setToolTip("Add at least one clip to export.")
         self.zoom_out_btn.setEnabled(False)
@@ -389,10 +361,8 @@ class MainWindow(QMainWindow):
             self.mute_btn.setEnabled(True)
             self.volume_slider.setEnabled(True)
             self.time_display.setEnabled(True)
-            self.start_btn.setEnabled(self.pending_start is None)
-            self.end_btn.setEnabled(self.pending_start is not None)
+            self._update_marker_buttons()
             self.zoom_in_btn.setEnabled(True)
-            # sets out/fit's enabled state and the (still-hidden) scrollbar's range
             self._on_view_changed(self.timeline.zoom, self.timeline.view_start, self.timeline.duration)
 
     def _on_view_changed(self, zoom: float, view_start: float, duration: float):
@@ -444,23 +414,49 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Marker placement (start -> end -> new clip)
     # ------------------------------------------------------------------
+    def _update_marker_buttons(self):
+        has_pending = self.pending_start is not None
+        has_selection = self.timeline.selected_clip_id is not None
+        self.start_btn.setEnabled(not has_pending)
+        self.end_btn.setEnabled(has_pending or has_selection)
+
     def on_set_start(self):
         if not self.video_path:
             return
         t = self.viewport.current_position()
+        if self.pending_start is None and self.timeline.selected_clip_id is not None:
+            clip = self._clip_by_id(self.timeline.selected_clip_id)
+            if clip:
+                lower, _upper = self.timeline.neighbor_bounds(clip)
+                clip.start = max(lower, min(t, clip.end - MIN_CLIP_LEN))
+                self.timeline.update_clip(clip)
+                self._on_clip_resized(clip.id, clip.start, clip.end)
+                self.statusBar().showMessage(
+                    f"'{clip.name}' in-point moved to {format_time(clip.start)}.", 3000)
+            return
         for clip in self.clips:
             if clip.contains(t):
                 self.statusBar().showMessage("Can't start a clip inside an existing clip.", 4000)
                 return
         self.pending_start = t
         self.timeline.set_pending_start(t)
-        self.start_btn.setEnabled(False)
-        self.end_btn.setEnabled(True)
+        self._update_marker_buttons()
         self.statusBar().showMessage(
             f"In-point set at {format_time(t)}. Scrub ahead and set the out-point.", 4000)
 
     def on_set_end(self):
         if self.pending_start is None:
+            clip = self._clip_by_id(self.timeline.selected_clip_id) \
+                if self.timeline.selected_clip_id is not None else None
+            if not clip:
+                return
+            t = self.viewport.current_position()
+            _lower, upper = self.timeline.neighbor_bounds(clip)
+            clip.end = min(upper, max(t, clip.start + MIN_CLIP_LEN))
+            self.timeline.update_clip(clip)
+            self._on_clip_resized(clip.id, clip.start, clip.end)
+            self.statusBar().showMessage(
+                f"'{clip.name}' out-point moved to {format_time(clip.end)}.", 3000)
             return
         t = self.viewport.current_position()
         if t <= self.pending_start:
@@ -483,8 +479,7 @@ class MainWindow(QMainWindow):
 
         self.pending_start = None
         self.timeline.set_pending_start(None)
-        self.start_btn.setEnabled(True)
-        self.end_btn.setEnabled(False)
+        self._update_marker_buttons()
         self.export_btn.setEnabled(True)
         self.export_btn.setToolTip("")
         self.statusBar().showMessage(f"Clip '{clip.name}' created.", 3000)
@@ -493,8 +488,7 @@ class MainWindow(QMainWindow):
         if self.pending_start is not None:
             self.pending_start = None
             self.timeline.set_pending_start(None)
-            self.start_btn.setEnabled(True)
-            self.end_btn.setEnabled(False)
+            self._update_marker_buttons()
             self.statusBar().showMessage("In-point cancelled.", 2000)
 
     # ------------------------------------------------------------------
@@ -588,9 +582,7 @@ class MainWindow(QMainWindow):
         self.viewport.play()
 
     # ------------------------------------------------------------------
-    # Shortcuts (guarded so typing in a rename box, or using the pan
-    # scrollbar's own Left/Right/Home/End keyboard handling, doesn't also
-    # trigger the global shortcut for the same key)
+    # Shortcuts
     # ------------------------------------------------------------------
     @staticmethod
     def _input_widget_has_focus() -> bool:

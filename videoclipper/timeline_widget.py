@@ -18,11 +18,8 @@ _TRACK_Y = 18
 _TRACK_H = 42
 _RULER_Y = _TRACK_Y + _TRACK_H + 4
 _EDGE_GRAB_PX = 6
-_MIN_CLIP_LEN = 0.05
+MIN_CLIP_LEN = 0.05
 
-# Zoom: 1.0 shows the whole clip (the only mode that existed before zoom was
-# added); MAX_ZOOM shows 1/60th of it. Exposed (no leading underscore) since
-# main_window.py compares against them to enable/disable the zoom buttons.
 MIN_ZOOM = 1.0
 MAX_ZOOM = 60.0
 _WHEEL_ZOOM_FACTOR = 1.15   # per wheel notch (angleDelta of 120)
@@ -65,9 +62,7 @@ class TimelineWidget(QWidget):
         self.clips: List[Clip] = []
         self.selected_clip_id: Optional[int] = None
 
-        # zoom/pan: the widget always maps [view_start, view_start + visible
-        # duration] to its width. zoom == MIN_ZOOM means visible duration ==
-        # duration (the only mode that existed before zoom was added).
+        # maps [view_start, view_start + visible_duration()] to the widget's width
         self.zoom = MIN_ZOOM
         self.view_start = 0.0
 
@@ -86,10 +81,7 @@ class TimelineWidget(QWidget):
 
     def set_position(self, seconds: float):
         self.position = max(0.0, seconds)
-        # Keep the playhead in view when zoomed in - e.g. playback or a
-        # keyboard seek moving it past the edge of the current window. A
-        # drag on the track itself can never do this: _t_for already clamps
-        # to the current window, so it can't produce an out-of-view result.
+        # keep the playhead in view when zoomed in
         if self.zoom > MIN_ZOOM + 1e-9:
             visible = self.visible_duration()
             if not (self.view_start <= self.position <= self.view_start + visible):
@@ -197,10 +189,7 @@ class TimelineWidget(QWidget):
         self.pan_to(self.view_start + delta_seconds)
 
     def pan_to(self, view_start: float):
-        """Move the visible window to start at `view_start` (clamped to
-        valid bounds) without changing zoom. Used by wheel/keyboard panning
-        and by the horizontal scrollbar main_window.py shows once zoomed
-        in - the scrollbar's own valueChanged handler calls this."""
+        """Move the visible window to start at `view_start` (clamped), without changing zoom."""
         old = self.view_start
         self._set_view_start(view_start)
         if abs(self.view_start - old) > 1e-9:
@@ -252,7 +241,7 @@ class TimelineWidget(QWidget):
                 return clip, "end"
         return None, None
 
-    def _neighbor_bounds(self, clip: Clip):
+    def neighbor_bounds(self, clip: Clip):
         """The [lower, upper] time range this clip's edges may move within,
         bounded by the nearest adjacent clips (clips never overlap)."""
         lower = 0.0
@@ -323,11 +312,6 @@ class TimelineWidget(QWidget):
         painter.setPen(QColor("#565b68"))
         visible = self.visible_duration()
         step = nice_time_step(visible, self._usable_width())
-        # Tick spacing (and the visible range to iterate) both track the
-        # zoomed-in window, not the full duration - otherwise a heavily
-        # zoomed-in view would either draw thousands of off-screen ticks
-        # (iterating from 0) or space them by the whole clip's duration
-        # (using the un-zoomed step).
         t = (self.view_start // step) * step if step > 0 else 0.0
         end_t = min(self.duration, self.view_start + visible)
         # small epsilon so float error doesn't drop the last tick
@@ -364,7 +348,7 @@ class TimelineWidget(QWidget):
                 self._set_selection(clip.id)
                 self._resizing_clip = clip
                 self._resizing_edge = edge
-                self._resize_lower, self._resize_upper = self._neighbor_bounds(clip)
+                self._resize_lower, self._resize_upper = self.neighbor_bounds(clip)
                 return
             clicked_clip = self._clip_at(event.position().toPoint())
             self._set_selection(clicked_clip.id if clicked_clip else None)
@@ -377,11 +361,11 @@ class TimelineWidget(QWidget):
             t = self._t_for(pos.x())
             clip = self._resizing_clip
             if self._resizing_edge == "start":
-                new_start = max(self._resize_lower, min(t, clip.end - _MIN_CLIP_LEN))
+                new_start = max(self._resize_lower, min(t, clip.end - MIN_CLIP_LEN))
                 clip.start = new_start
                 self.seek_requested.emit(new_start)
             else:
-                new_end = min(self._resize_upper, max(t, clip.start + _MIN_CLIP_LEN))
+                new_end = min(self._resize_upper, max(t, clip.start + MIN_CLIP_LEN))
                 clip.end = new_end
                 self.seek_requested.emit(new_end)
             self.clip_resizing.emit(clip.id, clip.start, clip.end)
