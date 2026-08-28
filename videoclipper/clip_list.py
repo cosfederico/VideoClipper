@@ -46,7 +46,7 @@ class ClipItemWidget(QFrame):
         outer.setSpacing(6)
 
         self.thumb_label = QLabel("Generating thumbnail…")
-        # Ignored horizontal: width comes from the layout, not the pixmap (see CLAUDE.md).
+        # Ignored horizontal: width comes from the layout, not the pixmap.
         self.thumb_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumb_label.setStyleSheet(
@@ -194,7 +194,7 @@ class ClipListPanel(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Always-on, not AsNeeded - avoids a width/height feedback loop (see CLAUDE.md).
+        # Always-on, not AsNeeded - avoids a width/height feedback loop.
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
         self._list_container = QWidget()

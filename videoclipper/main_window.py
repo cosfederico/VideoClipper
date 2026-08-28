@@ -309,7 +309,7 @@ class MainWindow(QMainWindow):
             bind("Del", self._shortcut_delete_selected_clip),
         ]
 
-        # Disables shortcuts while a text field/scrollbar has focus (see CLAUDE.md).
+        # Disables shortcuts while a text field/scrollbar has focus.
         QApplication.instance().focusChanged.connect(self._on_focus_changed)
         # Clears the timeline selection on any click outside the timeline.
         QApplication.instance().installEventFilter(self)

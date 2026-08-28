@@ -4,7 +4,7 @@ PyAV bundles FFmpeg's libraries directly, so there's no system ffmpeg
 binary, PATH lookup, or subprocess involved. Playback (video_widget.py)
 uses Qt's own multimedia backend and is unaffected.
 
-Two PyAV/libavcodec gotchas - see CLAUDE.md for details:
+Two PyAV/libavcodec gotchas:
 - An output video stream's `width`/`height` must be set explicitly before
   the first `encode()` call, or it silently opens at 640x480.
 - `Container.seek(offset, stream=X, ...)` interprets `offset` in stream
