@@ -1,6 +1,7 @@
 """Custom-painted timeline: scrub bar, pending marker, clip blocks, ruler."""
 from __future__ import annotations
 
+import time
 from typing import List, Optional
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
@@ -25,6 +26,7 @@ MAX_ZOOM = 60.0
 _WHEEL_ZOOM_FACTOR = 1.15   # per wheel notch (angleDelta of 120)
 _BUTTON_ZOOM_FACTOR = 1.6   # per click of the +/- buttons
 _WHEEL_PAN_FRACTION = 0.08  # of the visible window, per wheel notch
+_SEEK_THROTTLE_INTERVAL = 1 / 30  # caps rapid-fire seeks during a scrub/resize drag
 
 
 class _InlineEditor(QLineEdit):
@@ -67,6 +69,7 @@ class TimelineWidget(QWidget):
         self.view_start = 0.0
 
         self._dragging = False
+        self._last_seek_time = 0.0
         self._active_editor: Optional[_InlineEditor] = None
 
         self._resizing_clip: Optional[Clip] = None
@@ -335,6 +338,15 @@ class TimelineWidget(QWidget):
         painter.drawPolygon(triangle)
 
     # -- mouse interaction ---------------------------------------------------
+    def _seek_now(self, t: float):
+        self._last_seek_time = time.monotonic()
+        self.seek_requested.emit(t)
+
+    def _seek_throttled(self, t: float):
+        now = time.monotonic()
+        if now - self._last_seek_time >= _SEEK_THROTTLE_INTERVAL:
+            self._seek_now(t)
+
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.RightButton:
             clip = self._clip_at(event.position().toPoint())
@@ -353,7 +365,7 @@ class TimelineWidget(QWidget):
             clicked_clip = self._clip_at(event.position().toPoint())
             self._set_selection(clicked_clip.id if clicked_clip else None)
             self._dragging = True
-            self.seek_requested.emit(self._t_for(event.position().x()))
+            self._seek_now(self._t_for(event.position().x()))
 
     def mouseMoveEvent(self, event: QMouseEvent):
         pos = event.position()
@@ -363,16 +375,16 @@ class TimelineWidget(QWidget):
             if self._resizing_edge == "start":
                 new_start = max(self._resize_lower, min(t, clip.end - MIN_CLIP_LEN))
                 clip.start = new_start
-                self.seek_requested.emit(new_start)
+                self._seek_throttled(new_start)
             else:
                 new_end = min(self._resize_upper, max(t, clip.start + MIN_CLIP_LEN))
                 clip.end = new_end
-                self.seek_requested.emit(new_end)
+                self._seek_throttled(new_end)
             self.clip_resizing.emit(clip.id, clip.start, clip.end)
             self.update()
             return
         if self._dragging:
-            self.seek_requested.emit(self._t_for(pos.x()))
+            self._seek_throttled(self._t_for(pos.x()))
             return
         clip, _edge = self._edge_at(pos.toPoint())
         self.setCursor(Qt.CursorShape.SizeHorCursor if clip is not None
@@ -382,9 +394,15 @@ class TimelineWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if self._resizing_clip is not None:
                 clip = self._resizing_clip
+                edge = self._resizing_edge
                 self._resizing_clip = None
                 self._resizing_edge = None
+                # unthrottled - guarantees the final position lands exactly,
+                # even if the last mid-drag move was skipped by the throttle
+                self._seek_now(clip.start if edge == "start" else clip.end)
                 self.clip_resized.emit(clip.id, clip.start, clip.end)
+            elif self._dragging:
+                self._seek_now(self._t_for(event.position().x()))
             self._dragging = False
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
