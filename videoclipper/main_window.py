@@ -233,7 +233,7 @@ class MainWindow(QMainWindow):
 
         self.clip_panel = ClipListPanel()
         self.clip_panel.setObjectName("rightPane")
-        self.clip_panel.setMinimumWidth(300)
+        self.clip_panel.setMinimumWidth(190)
         self.clip_panel.setMaximumWidth(420)
 
         splitter.addWidget(left_pane)
@@ -380,6 +380,7 @@ class MainWindow(QMainWindow):
 
     def _reset_clips(self):
         self.clip_panel.clear()
+        self.clip_panel.set_aspect_ratio(None)  # back to the 16:9 default until the new video is probed
         self.timeline.reset()
         self.clips = []
         self.pending_start = None
@@ -526,6 +527,7 @@ class MainWindow(QMainWindow):
         self.source_info = info
         self.time_display.set_fps(info.fps)
         if info.width and info.height:
+            self.clip_panel.set_aspect_ratio(info.width / info.height)
             extra = f" ({info.width}x{info.height}"
             if info.fps:
                 extra += f", {format_fps(info.fps)} fps"
