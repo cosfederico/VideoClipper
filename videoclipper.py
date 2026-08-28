@@ -6,10 +6,6 @@ Usage:
 import os
 import sys
 
-# Disables Qt Multimedia's hardware video decode (avoids a VP9/D3D11VA bug
-# on Windows). Must be set before the PyQt6 import below.
-os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", ",")
-
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
