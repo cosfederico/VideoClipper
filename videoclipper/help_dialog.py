@@ -50,6 +50,9 @@ _HELP_HTML = f"""
       it; right-click it for rename/recolor/delete.</li>
   <li>Click a clip card on the right to jump to and play that clip -
       playback auto-pauses at its end.</li>
+  <li>Drag the divider to resize the clip panel - the cards scale with it,
+      and thumbnails match the loaded video's real aspect ratio. It won't
+      shrink past a minimum width; drag further to collapse it entirely.</li>
 </ul>
 
 <h3>Timeline zoom</h3>

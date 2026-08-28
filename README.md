@@ -51,6 +51,12 @@ python videoclipper.py
 7. Click a clip card on the right to jump the viewport to that clip's start
    and play it — playback auto-pauses at the clip's end. Any manual seek
    (dragging the timeline, arrow keys, Home/End) cancels that auto-stop.
+   Drag the divider between the viewport and the clip panel to resize it —
+   the cards (thumbnail, text, everything) scale with it, and each
+   thumbnail's shape matches the loaded video's actual aspect ratio rather
+   than assuming 16:9, so there's never empty space around it. The panel
+   won't shrink past a minimum width; dragging further past that collapses
+   it entirely — drag the thin strip back out to bring it back.
 8. Use the speaker button and slider next to Play to control volume/mute.
    The time readout in the middle shows `current / total` down to the
    frame (`2:10.15` = 2 minutes 10 seconds, frame 15) — click the current

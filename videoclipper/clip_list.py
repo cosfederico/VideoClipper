@@ -15,9 +15,15 @@ from PyQt6.QtWidgets import (
 )
 
 from .models import Clip
+from .style import MUTED
 from .utils import format_time
 
-_THUMB_W, _THUMB_H = 240, 135
+_CARD_MARGIN = 8      # matches ClipItemWidget's outer QVBoxLayout margins
+_DEFAULT_ASPECT = 16 / 9
+_MIN_ASPECT, _MAX_ASPECT = 0.3, 4.0  # clamp: extreme-portrait to extreme-ultrawide
+_BASE_CARD_W = 240     # card width at which text sizes below equal the app default
+_BASE_NAME_PX, _BASE_DURATION_PX = 13, 11
+_MIN_TEXT_SCALE, _MAX_TEXT_SCALE = 0.8, 1.6
 
 
 class ClipItemWidget(QFrame):
@@ -25,19 +31,23 @@ class ClipItemWidget(QFrame):
     renamed = pyqtSignal(int, str)
     delete_requested = pyqtSignal(int)
 
-    def __init__(self, clip: Clip, parent=None):
+    def __init__(self, clip: Clip, aspect_ratio: float = _DEFAULT_ASPECT, parent=None):
         super().__init__(parent)
         self.clip_id = clip.id
+        ratio = aspect_ratio if aspect_ratio and aspect_ratio > 0 else _DEFAULT_ASPECT
+        self._aspect_ratio = max(_MIN_ASPECT, min(_MAX_ASPECT, ratio))
+        self._raw_pixmap: Optional[QPixmap] = None
 
         self.setObjectName("clipItem")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setContentsMargins(_CARD_MARGIN, _CARD_MARGIN, _CARD_MARGIN, _CARD_MARGIN)
         outer.setSpacing(6)
 
         self.thumb_label = QLabel("Generating thumbnail…")
-        self.thumb_label.setFixedSize(_THUMB_W, _THUMB_H)
+        # Ignored horizontal: width comes from the layout, not the pixmap (see CLAUDE.md).
+        self.thumb_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumb_label.setStyleSheet(
             "background:#101116; color:#8d93a3; border-radius:6px;"
@@ -73,15 +83,49 @@ class ClipItemWidget(QFrame):
         self.name_edit.editingFinished.connect(self._commit_rename)
 
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self._update_thumb_size()
 
-    # -- external updates -------------------------------------------------
-    def set_thumbnail(self, pixmap: QPixmap):
-        scaled = pixmap.scaled(
-            _THUMB_W, _THUMB_H,
+    # -- responsive sizing --------------------------------------------------
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_thumb_size()
+
+    def _update_thumb_size(self):
+        avail_w = max(1, self.width() - 2 * _CARD_MARGIN)
+        thumb_h = max(2, round(avail_w / self._aspect_ratio))
+        if thumb_h != self.thumb_label.height():
+            self.thumb_label.setFixedHeight(thumb_h)
+        self._rescale_thumbnail()
+
+        scale = max(_MIN_TEXT_SCALE, min(_MAX_TEXT_SCALE, avail_w / _BASE_CARD_W))
+        name_px = max(10, round(_BASE_NAME_PX * scale))
+        duration_px = max(9, round(_BASE_DURATION_PX * scale))
+        # per-instance stylesheet so each card scales independently
+        self.name_label.setStyleSheet(f"font-weight:600; font-size:{name_px}px;")
+        self.duration_label.setStyleSheet(f"color:{MUTED}; font-size:{duration_px}px;")
+
+    def _rescale_thumbnail(self):
+        if self._raw_pixmap is None or self._raw_pixmap.isNull():
+            return
+        w, h = self.thumb_label.width(), self.thumb_label.height()
+        if w <= 0 or h <= 0:
+            return
+        scaled = self._raw_pixmap.scaled(
+            w, h,
             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
             Qt.TransformationMode.SmoothTransformation,
         )
         self.thumb_label.setPixmap(scaled)
+
+    def set_aspect_ratio(self, ratio: float):
+        ratio = ratio if ratio and ratio > 0 else _DEFAULT_ASPECT
+        self._aspect_ratio = max(_MIN_ASPECT, min(_MAX_ASPECT, ratio))
+        self._update_thumb_size()
+
+    # -- external updates -------------------------------------------------
+    def set_thumbnail(self, pixmap: QPixmap):
+        self._raw_pixmap = pixmap
+        self._rescale_thumbnail()
 
     def set_name(self, name: str):
         self.name_label.setText(name)
@@ -129,16 +173,19 @@ class ClipListPanel(QWidget):
         super().__init__(parent)
         self._items: Dict[int, ClipItemWidget] = {}
         self._clip_starts: Dict[int, float] = {}
+        self._aspect_ratio = _DEFAULT_ASPECT
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
 
         header = QHBoxLayout()
+        header.setSpacing(8)
         title = QLabel("Clips")
         title.setObjectName("panelHeader")
         self.count_label = QLabel("0")
         self.count_label.setObjectName("panelCount")
+        self.count_label.setVisible(False)  # hidden until there's at least one clip
         header.addWidget(title)
         header.addStretch(1)
         header.addWidget(self.count_label)
@@ -147,6 +194,8 @@ class ClipListPanel(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Always-on, not AsNeeded - avoids a width/height feedback loop (see CLAUDE.md).
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
         self._list_container = QWidget()
         self._list_layout = QVBoxLayout(self._list_container)
@@ -162,11 +211,19 @@ class ClipListPanel(QWidget):
         self.empty_hint.setObjectName("emptyHint")
         self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_hint.setWordWrap(True)
-        root.addWidget(self.empty_hint)
+        root.addWidget(self.empty_hint, 1)  # stretch matches scroll's, so extra space goes here
         self.scroll.setVisible(False)
 
+    def set_aspect_ratio(self, ratio: float):
+        """Called once the source video's dimensions are known (or reset to
+        the default when a new video is loading) so thumbnails match its
+        actual shape instead of an assumed 16:9."""
+        self._aspect_ratio = ratio if ratio and ratio > 0 else _DEFAULT_ASPECT
+        for item in self._items.values():
+            item.set_aspect_ratio(self._aspect_ratio)
+
     def add_clip(self, clip: Clip):
-        item = ClipItemWidget(clip)
+        item = ClipItemWidget(clip, aspect_ratio=self._aspect_ratio)
         item.activated.connect(self.item_activated.emit)
         item.renamed.connect(self.item_renamed.emit)
         item.delete_requested.connect(self.item_delete_requested.emit)
@@ -216,5 +273,6 @@ class ClipListPanel(QWidget):
     def _refresh_visibility(self):
         count = len(self._items)
         self.count_label.setText(str(count))
+        self.count_label.setVisible(count > 0)
         self.scroll.setVisible(count > 0)
         self.empty_hint.setVisible(count == 0)
