@@ -48,6 +48,8 @@ python videoclipper.py
 | Key | Action |
 | --- | --- |
 | *Ctrl+S* | Save project |
+| *Ctrl+Z* | Undo |
+| *Ctrl+Shift+Z* | Redo |
 | *Space* | Play / pause |
 | *I* | Set in-point (or move selected clip's in-point) |
 | *O* | Set out-point (or move selected clip's out-point) |
@@ -57,6 +59,10 @@ python videoclipper.py
 | *↑/↓* | Step one frame forward/back (pauses) |
 | *Home/End* | Jump to start/end |
 | *Del* | Delete the selected clip (no confirmation) |
+
+### Edit Menu
+
+**Undo** and **Redo** (also **Ctrl+Z** / **Ctrl+Shift+Z**) step back and forward through in/out points, trims, renames, recolors, and deletes — up to 100 steps.
 
 ### Help Menu
 

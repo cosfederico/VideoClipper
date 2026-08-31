@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import os
-from typing import List, Optional
+from collections import deque
+from typing import Callable, List, Optional, Tuple
 
 from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QKeySequence, QPixmap, QShortcut
@@ -28,6 +29,7 @@ _RECENT_PROJECTS_KEY = "recent_projects"
 _MAX_RECENT_PROJECTS = 10
 
 _SCROLLBAR_SCALE = 1000  # seconds -> integer units for the QScrollBar (millisecond resolution)
+_MAX_UNDO_HISTORY = 100
 
 _VIDEO_FILTER = (
     "Video Files (" + " ".join(f"*{ext}" for ext in VIDEO_EXTENSIONS) + ");;"
@@ -58,6 +60,10 @@ class MainWindow(QMainWindow):
         self._probe_workers: List[ProbeWorker] = []
         self._exporter: Optional[Exporter] = None
         self._progress_dialog: Optional[ExportProgressDialog] = None
+
+        self._undo_stack: deque = deque(maxlen=_MAX_UNDO_HISTORY)
+        self._redo_stack: deque = deque(maxlen=_MAX_UNDO_HISTORY)
+        self._pre_resize_snapshot: Optional[Tuple[int, float, float]] = None
 
         self._build_ui()
         self._wire_signals()
@@ -91,6 +97,18 @@ class MainWindow(QMainWindow):
 
         self.exit_action = QAction("Exit", self)
         file_menu.addAction(self.exit_action)
+
+        edit_menu = self.menuBar().addMenu("&Edit")
+
+        self.undo_action = QAction("Undo", self)
+        self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        self.undo_action.setEnabled(False)
+        edit_menu.addAction(self.undo_action)
+
+        self.redo_action = QAction("Redo", self)
+        self.redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        self.redo_action.setEnabled(False)
+        edit_menu.addAction(self.redo_action)
 
         self.help_action = QAction("&Help", self)
         self.menuBar().addAction(self.help_action)
@@ -248,6 +266,8 @@ class MainWindow(QMainWindow):
         self.recent_menu.aboutToShow.connect(self._rebuild_recent_menu)
         self.clear_recent_action.triggered.connect(self._clear_recent_projects)
         self.exit_action.triggered.connect(self.close)
+        self.undo_action.triggered.connect(self.undo)
+        self.redo_action.triggered.connect(self.redo)
         self.help_action.triggered.connect(self.show_help)
 
         self.viewport.open_requested.connect(self.open_video_dialog)
@@ -266,6 +286,7 @@ class MainWindow(QMainWindow):
         self.timeline.clip_renamed.connect(self.rename_clip)
         self.timeline.clip_delete_requested.connect(self.delete_clip)
         self.timeline.clip_color_requested.connect(self.change_clip_color)
+        self.timeline.clip_resize_started.connect(self._on_clip_resize_started)
         self.timeline.clip_resizing.connect(self._on_clip_resizing)
         self.timeline.clip_resized.connect(self._on_clip_resized)
         self.timeline.view_changed.connect(self._on_view_changed)
@@ -311,6 +332,7 @@ class MainWindow(QMainWindow):
 
     def _on_focus_changed(self, _old, _new):
         self._set_shortcuts_enabled(not self._input_widget_has_focus())
+        self._update_undo_redo_actions()
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.MouseButtonPress and self.timeline.selected_clip_id is not None:
@@ -342,6 +364,39 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.No,
         )
         return answer == QMessageBox.StandardButton.Yes
+
+    # ------------------------------------------------------------------
+    # Undo / redo
+    # ------------------------------------------------------------------
+    def _push_undo(self, undo_fn: Callable[[], None], redo_fn: Callable[[], None]):
+        self._undo_stack.append((undo_fn, redo_fn))
+        self._redo_stack.clear()
+        self._update_undo_redo_actions()
+
+    def undo(self):
+        if not self._undo_stack:
+            return
+        undo_fn, redo_fn = self._undo_stack.pop()
+        undo_fn()
+        self._redo_stack.append((undo_fn, redo_fn))
+        self._dirty = True
+        self._update_undo_redo_actions()
+        self.statusBar().showMessage("Undo", 2000)
+
+    def redo(self):
+        if not self._redo_stack:
+            return
+        undo_fn, redo_fn = self._redo_stack.pop()
+        redo_fn()
+        self._undo_stack.append((undo_fn, redo_fn))
+        self._dirty = True
+        self._update_undo_redo_actions()
+        self.statusBar().showMessage("Redo", 2000)
+
+    def _update_undo_redo_actions(self):
+        text_focused = self._input_widget_has_focus()
+        self.undo_action.setEnabled(not text_focused and bool(self._undo_stack))
+        self.redo_action.setEnabled(not text_focused and bool(self._redo_stack))
 
     # ------------------------------------------------------------------
     # Opening a video
@@ -383,6 +438,10 @@ class MainWindow(QMainWindow):
         self._clip_name_counter = 0
         self._dirty = False
         self._active_clip_end = None
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._pre_resize_snapshot = None
+        self._update_undo_redo_actions()
         self._update_marker_buttons()
         self.export_btn.setEnabled(False)
         self.export_btn.setToolTip("Add at least one clip to export.")
@@ -596,6 +655,11 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(not has_pending)
         self.end_btn.setEnabled(has_pending or has_selection)
 
+    def _set_pending_start(self, value: Optional[float]):
+        self.pending_start = value
+        self.timeline.set_pending_start(value)
+        self._update_marker_buttons()
+
     def on_set_start(self):
         if not self.video_path:
             return
@@ -604,19 +668,25 @@ class MainWindow(QMainWindow):
             clip = self._clip_by_id(self.timeline.selected_clip_id)
             if clip:
                 lower, _upper = self.timeline.neighbor_bounds(clip)
-                clip.start = max(lower, min(t, clip.end - MIN_CLIP_LEN))
-                self.timeline.update_clip(clip)
-                self._on_clip_resized(clip.id, clip.start, clip.end)
+                old_start = clip.start
+                new_start = max(lower, min(t, clip.end - MIN_CLIP_LEN))
+                self._apply_clip_start(clip.id, new_start)
+                self._push_undo(
+                    lambda cid=clip.id, s=old_start: self._apply_clip_start(cid, s),
+                    lambda cid=clip.id, s=new_start: self._apply_clip_start(cid, s),
+                )
                 self.statusBar().showMessage(
-                    f"'{clip.name}' in-point moved to {format_time(clip.start)}.", 3000)
+                    f"'{clip.name}' in-point moved to {format_time(new_start)}.", 3000)
             return
         for clip in self.clips:
             if clip.contains(t):
                 self.statusBar().showMessage("Can't start a clip inside an existing clip.", 4000)
                 return
-        self.pending_start = t
-        self.timeline.set_pending_start(t)
-        self._update_marker_buttons()
+        self._set_pending_start(t)
+        self._push_undo(
+            lambda: self._set_pending_start(None),
+            lambda t=t: self._set_pending_start(t),
+        )
         self.statusBar().showMessage(
             f"In-point set at {format_time(t)}. Scrub ahead and set the out-point.", 4000)
 
@@ -628,11 +698,15 @@ class MainWindow(QMainWindow):
                 return
             t = self.viewport.current_position()
             _lower, upper = self.timeline.neighbor_bounds(clip)
-            clip.end = min(upper, max(t, clip.start + MIN_CLIP_LEN))
-            self.timeline.update_clip(clip)
-            self._on_clip_resized(clip.id, clip.start, clip.end)
+            old_end = clip.end
+            new_end = min(upper, max(t, clip.start + MIN_CLIP_LEN))
+            self._apply_clip_end(clip.id, new_end)
+            self._push_undo(
+                lambda cid=clip.id, e=old_end: self._apply_clip_end(cid, e),
+                lambda cid=clip.id, e=new_end: self._apply_clip_end(cid, e),
+            )
             self.statusBar().showMessage(
-                f"'{clip.name}' out-point moved to {format_time(clip.end)}.", 3000)
+                f"'{clip.name}' out-point moved to {format_time(new_end)}.", 3000)
             return
         t = self.viewport.current_position()
         if t <= self.pending_start:
@@ -643,33 +717,72 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("That range overlaps an existing clip.", 4000)
                 return
 
+        pending_before = self.pending_start
         self._clip_name_counter += 1
         clip = Clip(start=self.pending_start, end=t,
                     name=f"Clip{self._clip_name_counter}",
                     color=random_pleasant_color())
-        self.clips.append(clip)
-        self.timeline.add_clip(clip)
-        self.clip_panel.add_clip(clip)
-        self._request_thumbnail(clip)
+        self._insert_clip_object(clip)
         self._dirty = True
+        self._set_pending_start(None)
 
-        self.pending_start = None
-        self.timeline.set_pending_start(None)
-        self._update_marker_buttons()
-        self.export_btn.setEnabled(True)
-        self.export_btn.setToolTip("")
+        def _undo_create(c=clip, pending=pending_before):
+            self._remove_clip_object(c)
+            self._set_pending_start(pending)
+
+        def _redo_create(c=clip):
+            self._set_pending_start(None)
+            self._insert_clip_object(c)
+
+        self._push_undo(_undo_create, _redo_create)
         self.statusBar().showMessage(f"Clip '{clip.name}' created.", 3000)
 
     def _cancel_pending_marker(self):
         if self.pending_start is not None:
-            self.pending_start = None
-            self.timeline.set_pending_start(None)
-            self._update_marker_buttons()
+            old_pending = self.pending_start
+            self._set_pending_start(None)
+            self._push_undo(
+                lambda p=old_pending: self._set_pending_start(p),
+                lambda: self._set_pending_start(None),
+            )
             self.statusBar().showMessage("In-point cancelled.", 2000)
 
     # ------------------------------------------------------------------
     # Trimming (drag a clip's edge on the timeline)
     # ------------------------------------------------------------------
+    def _refresh_clip_visuals(self, clip: Clip):
+        self._dirty = True
+        self.clip_panel.update_range(clip.id, clip.start, clip.end)
+        self._request_thumbnail(clip)  # the first frame may have moved
+
+    def _apply_clip_start(self, clip_id: int, start: float):
+        clip = self._clip_by_id(clip_id)
+        if not clip:
+            return
+        clip.start = start
+        self.timeline.update_clip(clip)
+        self._refresh_clip_visuals(clip)
+
+    def _apply_clip_end(self, clip_id: int, end: float):
+        clip = self._clip_by_id(clip_id)
+        if not clip:
+            return
+        clip.end = end
+        self.timeline.update_clip(clip)
+        self._refresh_clip_visuals(clip)
+
+    def _apply_clip_bounds(self, clip_id: int, start: float, end: float):
+        clip = self._clip_by_id(clip_id)
+        if not clip:
+            return
+        clip.start = start
+        clip.end = end
+        self.timeline.update_clip(clip)
+        self._refresh_clip_visuals(clip)
+
+    def _on_clip_resize_started(self, clip_id: int, start: float, end: float):
+        self._pre_resize_snapshot = (clip_id, start, end)
+
     def _on_clip_resizing(self, clip_id: int, start: float, end: float):
         item = self.clip_panel.get_item(clip_id)
         if item:
@@ -679,9 +792,17 @@ class MainWindow(QMainWindow):
         clip = self._clip_by_id(clip_id)
         if not clip:
             return
-        self._dirty = True
-        self.clip_panel.update_range(clip_id, start, end)
-        self._request_thumbnail(clip)  # the first frame may have moved
+        self._refresh_clip_visuals(clip)
+
+        snapshot = self._pre_resize_snapshot
+        self._pre_resize_snapshot = None
+        if snapshot and snapshot[0] == clip_id:
+            _, old_start, old_end = snapshot
+            if (old_start, old_end) != (start, end):
+                self._push_undo(
+                    lambda cid=clip_id, s=old_start, e=old_end: self._apply_clip_bounds(cid, s, e),
+                    lambda cid=clip_id, s=start, e=end: self._apply_clip_bounds(cid, s, e),
+                )
 
     # ------------------------------------------------------------------
     # Thumbnails
@@ -710,35 +831,79 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Rename / delete / recolor
     # ------------------------------------------------------------------
-    def rename_clip(self, clip_id: int, name: str):
+    def _insert_clip_object(self, clip: Clip):
+        """Re-adds a previously removed Clip object (same id/thumbnail) -
+        used both for a fresh clip and for undo/redo of deletion/creation."""
+        self.clips.append(clip)
+        self.timeline.add_clip(clip)
+        self.clip_panel.add_clip(clip)
+        if isinstance(clip.thumbnail, QPixmap) and not clip.thumbnail.isNull():
+            self.clip_panel.update_thumbnail(clip.id, clip.thumbnail)
+        else:
+            self._request_thumbnail(clip)
+        self.export_btn.setEnabled(True)
+        self.export_btn.setToolTip("")
+
+    def _remove_clip_object(self, clip: Clip):
+        self.clips = [c for c in self.clips if c.id != clip.id]
+        self.timeline.remove_clip(clip.id)
+        self.clip_panel.remove_clip(clip.id)
+        if not self.clips:
+            self.export_btn.setEnabled(False)
+            self.export_btn.setToolTip("Add at least one clip to export.")
+
+    def _apply_clip_name(self, clip_id: int, name: str):
         clip = self._clip_by_id(clip_id)
         if not clip:
             return
         clip.name = name
-        self._dirty = True
         self.timeline.update_clip(clip)
         self.clip_panel.rename_clip(clip_id, name)
+
+    def _apply_clip_color(self, clip_id: int, color: tuple):
+        clip = self._clip_by_id(clip_id)
+        if not clip:
+            return
+        clip.color = color
+        self.timeline.update_clip(clip)
+
+    def rename_clip(self, clip_id: int, name: str):
+        clip = self._clip_by_id(clip_id)
+        if not clip or clip.name == name:
+            return
+        old_name = clip.name
+        self._dirty = True
+        self._apply_clip_name(clip_id, name)
+        self._push_undo(
+            lambda cid=clip_id, n=old_name: self._apply_clip_name(cid, n),
+            lambda cid=clip_id, n=name: self._apply_clip_name(cid, n),
+        )
 
     def delete_clip(self, clip_id: int):
         clip = self._clip_by_id(clip_id)
         if not clip:
             return
-        self.clips = [c for c in self.clips if c.id != clip_id]
-        self.timeline.remove_clip(clip_id)
-        self.clip_panel.remove_clip(clip_id)
+        self._remove_clip_object(clip)
         self._dirty = True
-        if not self.clips:
-            self.export_btn.setEnabled(False)
-            self.export_btn.setToolTip("Add at least one clip to export.")
+        self._push_undo(
+            lambda c=clip: self._insert_clip_object(c),
+            lambda c=clip: self._remove_clip_object(c),
+        )
 
     def change_clip_color(self, clip_id: int):
         clip = self._clip_by_id(clip_id)
         if not clip:
             return
         color = QColorDialog.getColor(QColor(*clip.color), self, "Choose clip color")
-        if color.isValid():
-            clip.color = (color.red(), color.green(), color.blue())
-            self.timeline.update_clip(clip)
+        if not color.isValid():
+            return
+        old_color = clip.color
+        new_color = (color.red(), color.green(), color.blue())
+        self._apply_clip_color(clip_id, new_color)
+        self._push_undo(
+            lambda cid=clip_id, c=old_color: self._apply_clip_color(cid, c),
+            lambda cid=clip_id, c=new_color: self._apply_clip_color(cid, c),
+        )
 
     def _clip_by_id(self, clip_id: int) -> Optional[Clip]:
         for clip in self.clips:

@@ -46,6 +46,7 @@ class TimelineWidget(QWidget):
     clip_renamed = pyqtSignal(int, str)
     clip_delete_requested = pyqtSignal(int)
     clip_color_requested = pyqtSignal(int)
+    clip_resize_started = pyqtSignal(int, float, float)  # once, on press (pre-drag bounds)
     clip_resizing = pyqtSignal(int, float, float)   # live, while dragging an edge
     clip_resized = pyqtSignal(int, float, float)    # once, on release
     view_changed = pyqtSignal(float, float, float)  # zoom, view_start, duration
@@ -361,6 +362,7 @@ class TimelineWidget(QWidget):
                 self._resizing_clip = clip
                 self._resizing_edge = edge
                 self._resize_lower, self._resize_upper = self.neighbor_bounds(clip)
+                self.clip_resize_started.emit(clip.id, clip.start, clip.end)
                 return
             clicked_clip = self._clip_at(event.position().toPoint())
             self._set_selection(clicked_clip.id if clicked_clip else None)
