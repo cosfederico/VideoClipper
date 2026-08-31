@@ -7,6 +7,8 @@ from .style import ACCENT, BORDER, MUTED, TEXT
 
 _SHORTCUTS = [
     ("Ctrl+S", "Save project"),
+    ("Ctrl+Z", "Undo"),
+    ("Ctrl+Shift+Z", "Redo"),
     ("Space", "Play / pause"),
     ("I", "Set in-point (or move selected clip's in-point)"),
     ("O", "Set out-point (or move selected clip's out-point)"),
@@ -53,6 +55,8 @@ _HELP_HTML = f"""
   <li>Drag the divider to resize the clip panel - the cards scale with it,
       and thumbnails match the loaded video's real aspect ratio. It won't
       shrink past a minimum width; drag further to collapse it entirely.</li>
+  <li><b>Ctrl+Z</b> / <b>Ctrl+Shift+Z</b> undo/redo in/out points, trims,
+      renames, recolors, and deletes, up to 100 steps back.</li>
 </ul>
 
 <h3>Timeline zoom</h3>
