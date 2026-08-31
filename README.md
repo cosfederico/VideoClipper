@@ -28,11 +28,12 @@ python videoclipper.py
 
 ## Using it
 
-1. Click **Open Video** (top left, or the big button in the viewport), or
-   drag and drop a video file onto the viewport, to load it — it loads
-   paused, on the first frame. Opening another video later (via either
-   method) replaces the current one — if you have clips that haven't been
-   exported yet, you'll be asked to confirm first (same on quitting the app).
+1. Use **File > Open Video...**, click the button in the viewport, or drag
+   and drop a video file onto the viewport (works at any time, even with a
+   video already loaded), to load it — it loads paused, on the first frame.
+   Opening another video later (via any method) replaces the current one —
+   if you have clips that haven't been exported yet, you'll be asked to
+   confirm first (same on quitting the app).
 2. Scrub the timeline (click/drag) or press **Space** to play/pause.
 3. Press **I** (or click **Set In**) at the point you want a clip to start.
 4. Scrub ahead and press **O** (or click **Set Out**) to close the clip.
@@ -78,7 +79,7 @@ python videoclipper.py
 
 ### File menu
 
-- **Open Video...** — same as the Open Video button.
+- **Open Video...** — same as clicking the Open Video button in the viewport, or dragging a video onto it.
 - **Save Project JSON...** (**Ctrl+S**) — saves the video path, all clips
   (name/start/end/color), and the last-used export settings to a JSON
   file. The first save asks for a location; after that, Ctrl+S saves
