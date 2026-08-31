@@ -110,9 +110,6 @@ class MainWindow(QMainWindow):
         title = QLabel("VideoClipper")
         title.setObjectName("appTitle")
 
-        self.open_video_btn = QPushButton("Open Video")
-        self.open_video_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-
         self.export_btn = QPushButton("Export Clips")
         self.export_btn.setObjectName("primaryButton")
         self.export_btn.setEnabled(False)
@@ -120,7 +117,6 @@ class MainWindow(QMainWindow):
         self.export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
         top_layout.addWidget(title)
-        top_layout.addWidget(self.open_video_btn)
         top_layout.addStretch(1)
         top_layout.addWidget(self.export_btn)
         main_layout.addWidget(top_bar)
@@ -254,7 +250,6 @@ class MainWindow(QMainWindow):
         self.exit_action.triggered.connect(self.close)
         self.help_action.triggered.connect(self.show_help)
 
-        self.open_video_btn.clicked.connect(self.open_video_dialog)
         self.viewport.open_requested.connect(self.open_video_dialog)
         self.viewport.video_dropped.connect(self._try_load_video)
         self.viewport.position_changed.connect(self._on_position_changed)
