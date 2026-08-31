@@ -32,17 +32,6 @@ pip install -r requirements.txt
 python videoclipper.py
 ```
 
-<!-- ## Visual Overview
-
-**Startup state** — ready to open a video:
-
-![Startup screen with drag-and-drop zone](videoclipper/assets/screenshots/startup.png)
-
-**Export dialog** — choose output folder, format, and quality settings:
-
-![Export settings with codec, resolution, frame rate, and audio options](videoclipper/assets/screenshots/export.png) -->
-
-
 ## Overview
 
 ### Features
@@ -127,6 +116,20 @@ For detailed instructions on how to use the app, you can always use the **Help**
 | **Include video name** | On by default. Names exports `{video_name}_{clip_name}.ext` instead of `{clip_name}.ext`. |
 | **Save clip metadata** | On by default. Writes `{video_name}_clips_metadata.json` alongside the clips with source info, export settings, and each clip's name/file/start/end/duration. |
 
+
+## Screenshots
+
+**Startup state** — ready to open a video:
+
+![Startup screen with drag-and-drop zone](videoclipper/assets/screenshots/startup.png)
+
+**Export dialog** — choose output folder, format, and quality settings:
+
+![Export settings with codec, resolution, frame rate, and audio options](videoclipper/assets/screenshots/export.png)
+
+**Render dialog** - report progress of rendering of current clip and across total number of clips:
+
+![Render dialog with multi-level progress bar](videoclipper/assets/screenshots/rendering.png)
 
 ## License
 
